@@ -290,10 +290,10 @@ class RobloxCaptchaCollector:
 
     # -- Click "Start Puzzle" / "Verify" để hiện game --
 
-    async def _click_by_image(self, frame, round_num: int = 0) -> bool:
+    async def _click_by_image(self, iframe_el, frame, round_num: int = 0) -> bool:
         """
-        Click nút Start Puzzle bằng cách match ảnh base64.
-        Chụp màn hình iframe -> dùng OpenCV template matching -> click toạ độ.
+        Click nut Start Puzzle bang cach match anh base64.
+        Chup man hinh iframe -> dung OpenCV template matching -> click toa do.
         """
         try:
             import base64
@@ -302,11 +302,11 @@ class RobloxCaptchaCollector:
             from PIL import Image
             import io
         except ImportError:
-            self._step("⚠️ Thiếu opencv-python, bỏ qua image click")
+            self._step("Thieu opencv-python, bo qua image click")
             return False
 
         try:
-            # Lưu asset ảnh mẫu
+            # Luu asset anh mau
             asset_dir = INPUT_DIR / "assets"
             asset_dir.mkdir(exist_ok=True)
             template_path = asset_dir / "start_puzzle.png"
@@ -315,8 +315,8 @@ class RobloxCaptchaCollector:
                 with open(template_path, "wb") as f:
                     f.write(img_bytes)
 
-            # Chụp iframe
-            screenshot_bytes = await frame.screenshot()
+            # Chup iframe element (khong dung frame.screenshot vi khong co)
+            screenshot_bytes = await iframe_el.screenshot()
             screenshot = np.array(Image.open(io.BytesIO(screenshot_bytes)).convert("RGB"))
             screenshot_bgr = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
 
@@ -349,15 +349,33 @@ class RobloxCaptchaCollector:
     # -- Click "Start Puzzle" / "Verify" --
 
     async def _click_reveal_captcha(self, page, round_num: int = 0):
-        """Tìm và bấm nút Verify/Start Puzzle trong iframe FunCAPTCHA."""
+        """Tim va bam nut Verify/Start Puzzle trong iframe FunCAPTCHA."""
 
-        # --- Cách 0: Click bằng ảnh base64 (OpenCV) ---
+        # --- Doi loading "Verifying browser..." bien mat ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
-                    if await self._click_by_image(frame, round_num):
+                    loading_sel = '#text-loading, .text.loading, [class*="loading"]'
+                    try:
+                        loading_el = await frame.wait_for_selector(loading_sel, timeout=3000)
+                        if loading_el:
+                            self._step("Doi 'Verifying browser...' bien mat...")
+                            await loading_el.wait_for(state="hidden", timeout=15000)
+                            self._step("Loading done - CAPTCHA da san sang")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # --- Cach 0: Click bang anh base64 (OpenCV) ---
+        try:
+            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
+            if iframe_el:
+                frame = await iframe_el.content_frame()
+                if frame:
+                    if await self._click_by_image(iframe_el, frame, round_num):
                         return True
         except Exception:
             pass
