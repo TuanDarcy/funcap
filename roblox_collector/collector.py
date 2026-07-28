@@ -29,6 +29,7 @@ Cau truc:
 import asyncio
 import json
 import os
+import signal
 import sys
 import time
 import threading
@@ -44,6 +45,16 @@ except ImportError:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
     logger = logging.getLogger("collector")
 
+# Global shutdown flag for Ctrl+C
+_shutdown = threading.Event()
+
+def _signal_handler(signum, frame):
+    print("\n[!] Ctrl+C - shutting down gracefully...")
+    _shutdown.set()
+
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
+
 # --- Paths ---
 BASE_DIR = Path(__file__).parent.resolve()
 INPUT_DIR = BASE_DIR / "input"
@@ -57,15 +68,15 @@ DEFAULT_CONFIG = {
     "threads": 5,
     "captchas_per_account": 20,
     "reload_delay_sec": 2.0,
-    "headless": True,
+    "headless": False,
     "viewport_width": 500,
     "viewport_height": 700,
-    "use_proxy": True,
+    "use_proxy": False,
     "proxy_mode": "per_tab",
     "captcha_timeout_sec": 15,
     "click_to_reveal": True,
     "click_delay_sec": 2.0,
-    "debug": False,
+    "debug": True,
     "debug_dir": "captured/_debug",
 }
 
@@ -361,6 +372,7 @@ class RobloxCaptchaCollector:
 
         captured_all = []
         target = self.cfg["captchas_per_account"]
+        logger.info(f"[{self.username}] START: target={target}, proxy={self.proxy or 'direct'}, headless={self.cfg['headless']}, debug={self.cfg.get('debug')}")
 
         try:
             async with async_playwright() as p:
@@ -375,16 +387,23 @@ class RobloxCaptchaCollector:
                 }
 
                 proxy_cfg = None
-                if self.cfg.get("use_proxy", True) and self.proxy:
+                if self.cfg.get("use_proxy", False) and self.proxy:
                     proxy_cfg = self.parse_proxy(self.proxy)
                 if proxy_cfg:
                     launch_opts["proxy"] = proxy_cfg
+                    logger.info(f"[{self.username}] Proxy: {self.proxy}")
 
                 browser = await p.chromium.launch(**launch_opts)
+                logger.debug(f"[{self.username}] Browser launched")
 
                 for round_num in range(target):
+                    if _shutdown.is_set():
+                        logger.warning(f"[{self.username}] Shutdown signal - stopping at round {round_num+1}/{target}")
+                        break
+
                     context = None
                     try:
+                        logger.debug(f"[{self.username}] #{round_num+1}/{target} --- NEW ROUND ---")
                         context = await browser.new_context(
                             viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -392,6 +411,7 @@ class RobloxCaptchaCollector:
                         )
                         page = await context.new_page()
                         await page.add_init_script(self.STEALTH_JS)
+                        logger.debug(f"[{self.username}] #{round_num+1} New page created")
 
                         # (1) Vao Roblox login
                         logger.debug(f"[{self.username}] #{round_num+1} Vao Roblox login...")
@@ -478,18 +498,26 @@ class RobloxCaptchaCollector:
 
     async def _capture_iframe(self, page, round_num: int, ts: str) -> List[Dict]:
         """Chup key-frame + tung anh lua chon (Image 1 of 5, ...)."""
+        if _shutdown.is_set():
+            return []
+
         results = []
+        logger.debug(f"[{self.username}] _capture_iframe: bat dau...")
 
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if not iframe_el:
+                logger.debug(f"[{self.username}] _capture_iframe: KHONG tim thay iframe")
                 return results
 
             frame = await iframe_el.content_frame()
             if not frame:
+                logger.debug(f"[{self.username}] _capture_iframe: iframe khong co content_frame")
                 return results
 
             game_type = await self._detect_game_type(frame, iframe_el)
+            logger.debug(f"[{self.username}] _capture_iframe: detected game_type={game_type}")
+
             type_dir = CAPTURED_DIR / game_type
             type_dir.mkdir(parents=True, exist_ok=True)
 
@@ -501,13 +529,16 @@ class RobloxCaptchaCollector:
                     await key_img.screenshot(path=str(key_path))
                     results.append({"image_path": str(key_path), "type": f"{game_type}_keyframe",
                                     "username": self.username, "round": round_num + 1, "ts": ts})
-                    logger.debug(f"[{self.username}] Chup key-frame")
-            except Exception:
-                pass
+                    logger.debug(f"[{self.username}] Chup key-frame OK: {key_path.name}")
+                else:
+                    logger.debug(f"[{self.username}] Khong tim thay key-frame (Match This!)")
+            except Exception as e:
+                logger.debug(f"[{self.username}] Loi chup key-frame: {e}")
 
             # --- 2. Chup TUNG anh lua chon: Image 1 of 5, Image 2 of 5, ... ---
             try:
                 choice_imgs = await frame.locator(self.SEL_CHOICE_IMAGES).all()
+                logger.debug(f"[{self.username}] Tim thay {len(choice_imgs)} anh lua chon")
                 for img_el in choice_imgs:
                     aria_label = await img_el.get_attribute("aria-label") or f"choice_{round_num}"
                     safe_name = aria_label.replace(" ", "_").replace(".", "").replace(":", "")[:30]
@@ -517,15 +548,15 @@ class RobloxCaptchaCollector:
                         results.append({"image_path": str(choice_path), "type": f"{game_type}_choice",
                                         "aria_label": aria_label, "username": self.username,
                                         "round": round_num + 1, "ts": ts})
-                    except Exception:
-                        pass
-                if choice_imgs:
-                    logger.debug(f"[{self.username}] Chup {len(choice_imgs)} anh lua chon")
-            except Exception:
-                pass
+                        logger.debug(f"[{self.username}] Chup choice OK: {safe_name}")
+                    except Exception as e:
+                        logger.debug(f"[{self.username}] Loi chup choice {aria_label}: {e}")
+            except Exception as e:
+                logger.debug(f"[{self.username}] Loi locator choice images: {e}")
 
             # --- 3. Fallback: chup toan bo game ---
             if not results:
+                logger.debug(f"[{self.username}] Fallback: chup toan bo game area")
                 game_path = type_dir / f"{self.username}_r{round_num}_full_{ts}.png"
                 try:
                     area = await frame.wait_for_selector(self.SEL_GAME_AREA, timeout=3000)
@@ -539,8 +570,9 @@ class RobloxCaptchaCollector:
                                 "username": self.username, "round": round_num + 1, "ts": ts})
 
         except Exception as e:
-            logger.debug(f"[{self.username}] _capture_iframe: {e}")
+            logger.debug(f"[{self.username}] _capture_iframe EXCEPTION: {e}")
 
+        logger.debug(f"[{self.username}] _capture_iframe: done, {len(results)} results")
         return results
 
 
@@ -653,9 +685,16 @@ def collect_all():
     with ThreadPoolExecutor(max_workers=n_threads) as executor:
         futures = {}
         for (username, password), proxy in proxy_map.items():
+            if _shutdown.is_set():
+                break
             futures[executor.submit(process, username, password, proxy)] = username
 
         for future in as_completed(futures):
+            if _shutdown.is_set():
+                logger.warning("Shutting down - cancelling remaining tasks...")
+                for f in futures:
+                    f.cancel()
+                break
             username = futures[future]
             try:
                 results = future.result()
