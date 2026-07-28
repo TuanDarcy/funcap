@@ -85,19 +85,33 @@ class RobloxCaptchaCollector:
 
     ROBLOX_LOGIN_URL = "https://www.roblox.com/login"
 
-    # ═══ CSS Selectors (hardcode trong code, sua truc tiep neu Roblox/Arkose doi HTML) ═══
+    # ═══ CSS Selectors — DOM thật từ F12 của FunCAPTCHA Arkose ═══
     # --- Login form ---
     SEL_USERNAME = "#login-username"
     SEL_PASSWORD = "#login-password"
     SEL_SUBMIT = "#login-button"
-    SEL_USERNAME_FB = 'input[name="username"]'       # fallback
-    SEL_PASSWORD_FB = 'input[name="password"]'       # fallback
-    SEL_SUBMIT_FB = 'button[type="submit"]'          # fallback
+    SEL_USERNAME_FB = 'input[name="username"]'
+    SEL_PASSWORD_FB = 'input[name="password"]'
+    SEL_SUBMIT_FB = 'button[type="submit"]'
 
-    # --- FunCAPTCHA iframe ---
-    SEL_CAPTCHA_IFRAME = 'iframe[src*="arkose"], iframe[src*="funcaptcha"], iframe[src*="arkoselabs"]'
-    SEL_GAME_AREA = 'canvas, img[src*="game"], [class*="game"], [class*="challenge"]'
-    SEL_CLICK_TARGET = 'button, [class*="start"], [class*="play"], [class*="begin"]'
+    # --- FunCAPTCHA iframe (Arkose Labs) ---
+    SEL_CAPTCHA_IFRAME = '#game-core-frame, iframe[src*="arkose"], iframe[src*="funcaptcha"]'
+
+    # --- Nút "Start Puzzle" trong iframe ---
+    SEL_START_PUZZLE = 'button[data-theme="home.verifyButton"], button[aria-label*="Start Puzzle"]'
+
+    # --- Ảnh lựa chọn: "Image 1 of 5", "Image 2 of 5", ... ---
+    SEL_CHOICE_IMAGES = 'img[aria-label*="Image "][aria-label*=" of "]'
+
+    # --- Ảnh chính cần match: "Match This!" ---
+    SEL_KEY_FRAME = 'img.key-frame-image, img[aria-label*="Match This"]'
+
+    # --- Game area (canvas chính) ---
+    SEL_GAME_AREA = 'canvas, [class*="game"], [class*="challenge"]'
+
+    # --- Nút xoay phải / điều hướng ---
+    SEL_ROTATE_RIGHT = 'circle[r="17"]'
+    SEL_NAV_BUTTONS = 'button[aria-label*="right"], button[aria-label*="next"], [class*="arrow-right"]'
 
     # --- Game type detection keywords ---
     GAME_TYPE_KEYWORDS = {
@@ -238,26 +252,30 @@ class RobloxCaptchaCollector:
             except Exception:
                 await page.keyboard.press("Enter")
 
-    # -- Click to reveal CAPTCHA game --
+    # -- Click "Start Puzzle" de reveal game --
 
     async def _click_reveal_captcha(self, page):
+        """Bam nut Start Puzzle trong iframe FunCAPTCHA."""
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if iframe_el:
-                await iframe_el.click(timeout=3000)
-                await asyncio.sleep(1)
+            if not iframe_el:
+                return
+            frame = await iframe_el.content_frame()
+            if not frame:
+                return
+            btn = await frame.wait_for_selector(self.SEL_START_PUZZLE, timeout=5000)
+            if btn:
+                await btn.click(timeout=3000)
+                logger.debug(f"[{self.username}] Da click Start Puzzle")
+                await asyncio.sleep(self.cfg.get("click_delay_sec", 2.0))
+                return
         except Exception:
             pass
-
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
-                frame = await iframe_el.content_frame()
-                if frame:
-                    btn = await frame.wait_for_selector(self.SEL_CLICK_TARGET, timeout=3000)
-                    if btn:
-                        await btn.click(timeout=3000)
-                        logger.debug(f"[{self.username}] Đã click nút Start CAPTCHA")
+                await iframe_el.click(timeout=3000)
+                await asyncio.sleep(2)
         except Exception:
             pass
 
@@ -364,9 +382,10 @@ class RobloxCaptchaCollector:
         logger.success(f"[{self.username}] Done: {self.total_captured}/{target} captures")
         return captured_all
 
-    # -- Capture CAPTCHA iframe --
+    # -- Capture CAPTCHA iframe (chup tung anh rieng le) --
 
     async def _capture_iframe(self, page, round_num: int, ts: str) -> List[Dict]:
+        """Chup key-frame + tung anh lua chon (Image 1 of 5, ...)."""
         results = []
 
         try:
@@ -382,51 +401,50 @@ class RobloxCaptchaCollector:
             type_dir = CAPTURED_DIR / game_type
             type_dir.mkdir(parents=True, exist_ok=True)
 
-            # Chụp game area
-            game_path = type_dir / f"{self.username}_r{round_num}_{ts}.png"
+            # --- 1. Chup "Match This!" key frame ---
             try:
-                area = await frame.wait_for_selector(self.SEL_GAME_AREA, timeout=3000)
-                if area:
-                    await area.screenshot(path=str(game_path))
-                else:
-                    await frame.screenshot(path=str(game_path))
-            except Exception:
-                await frame.screenshot(path=str(game_path))
-
-            # Doc instruction
-            instruction = None
-            try:
-                for sel in ['h2', 'h3', '[class*="instruction"]', '.game-instruction', '[class*="header"]']:
-                    el = await frame.wait_for_selector(sel, timeout=800)
-                    if el:
-                        txt = (await el.inner_text()).strip()
-                        if txt and len(txt) > 3:
-                            instruction = txt
-                            break
+                key_img = await frame.wait_for_selector(self.SEL_KEY_FRAME, timeout=3000)
+                if key_img:
+                    key_path = type_dir / f"{self.username}_r{round_num}_key_{ts}.png"
+                    await key_img.screenshot(path=str(key_path))
+                    results.append({"image_path": str(key_path), "type": f"{game_type}_keyframe",
+                                    "username": self.username, "round": round_num + 1, "ts": ts})
+                    logger.debug(f"[{self.username}] Chup key-frame")
             except Exception:
                 pass
 
-            results.append({
-                "image_path": str(game_path),
-                "type": game_type,
-                "instruction": instruction,
-                "username": self.username,
-                "round": round_num + 1,
-                "ts": ts,
-            })
-
-            # Capture tiles
+            # --- 2. Chup TUNG anh lua chon: Image 1 of 5, Image 2 of 5, ... ---
             try:
-                tiles = await frame.locator('[class*="tile"], [class*="grid-item"]').all()
-                for i, tile in enumerate(tiles[:9]):
-                    tp = type_dir / f"{self.username}_r{round_num}_t{i}_{ts}.png"
+                choice_imgs = await frame.locator(self.SEL_CHOICE_IMAGES).all()
+                for img_el in choice_imgs:
+                    aria_label = await img_el.get_attribute("aria-label") or f"choice_{round_num}"
+                    safe_name = aria_label.replace(" ", "_").replace(".", "").replace(":", "")[:30]
+                    choice_path = type_dir / f"{self.username}_r{round_num}_{safe_name}_{ts}.png"
                     try:
-                        await tile.screenshot(path=str(tp))
-                        results.append({"image_path": str(tp), "type": f"{game_type}_tile{i}", "username": self.username, "round": round_num + 1, "ts": ts})
+                        await img_el.screenshot(path=str(choice_path))
+                        results.append({"image_path": str(choice_path), "type": f"{game_type}_choice",
+                                        "aria_label": aria_label, "username": self.username,
+                                        "round": round_num + 1, "ts": ts})
                     except Exception:
                         pass
+                if choice_imgs:
+                    logger.debug(f"[{self.username}] Chup {len(choice_imgs)} anh lua chon")
             except Exception:
                 pass
+
+            # --- 3. Fallback: chup toan bo game ---
+            if not results:
+                game_path = type_dir / f"{self.username}_r{round_num}_full_{ts}.png"
+                try:
+                    area = await frame.wait_for_selector(self.SEL_GAME_AREA, timeout=3000)
+                    if area:
+                        await area.screenshot(path=str(game_path))
+                    else:
+                        await frame.screenshot(path=str(game_path))
+                except Exception:
+                    await frame.screenshot(path=str(game_path))
+                results.append({"image_path": str(game_path), "type": game_type,
+                                "username": self.username, "round": round_num + 1, "ts": ts})
 
         except Exception as e:
             logger.debug(f"[{self.username}] _capture_iframe: {e}")
