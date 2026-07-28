@@ -333,17 +333,55 @@ class RobloxCaptchaCollector:
                 self._step(f"Match confidence: {max_val:.2f} < 0.5 — bo qua")
                 return False
 
-            # Click giữa template
+            # Click giua template - dung mouse move + click nhu nguoi that
             h, w = template.shape[:2]
             center_x = max_loc[0] + w // 2
             center_y = max_loc[1] + h // 2
-            self._step(f"🖼️ Click bằng ảnh tại ({center_x}, {center_y}) — confidence: {max_val:.2f}")
-            await frame.click(position={"x": center_x, "y": center_y}, timeout=3000)
-            await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
-            return True
+            self._step(f"Image click: ({center_x}, {center_y}) conf={max_val:.2f}")
+
+            # Cach 1: Tim button element va click bang JS (manh nhat)
+            try:
+                btn = await frame.wait_for_selector(
+                    'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")',
+                    timeout=2000,
+                )
+                if btn:
+                    await btn.scroll_into_view_if_needed()
+                    await btn.hover()
+                    await asyncio.sleep(0.2)
+                    await btn.click(force=True, timeout=3000)
+                    self._step("Clicked button element (force)")
+                    await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+                    return True
+            except Exception:
+                pass
+
+            # Cach 2: Mouse move + click tai toa do (gia lap nguoi)
+            try:
+                await frame.click(position={"x": center_x, "y": center_y}, timeout=3000)
+                self._step("Clicked at coordinates")
+                await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+                return True
+            except Exception:
+                pass
+
+            # Cach 3: JS dispatchEvent
+            try:
+                btn = await frame.wait_for_selector(
+                    'button[data-theme="home.verifyButton"]', timeout=2000,
+                )
+                if btn:
+                    await btn.evaluate("el => el.click()")
+                    self._step("Clicked via JS el.click()")
+                    await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+                    return True
+            except Exception:
+                pass
+
+            return False
 
         except Exception as e:
-            self._step(f"⚠️ Image click lỗi: {e}")
+            self._step(f"Image click error: {e}")
             return False
 
     # -- Click bang anh base64 (OpenCV) --
@@ -351,23 +389,35 @@ class RobloxCaptchaCollector:
     async def _click_reveal_captcha(self, page, round_num: int = 0):
         """Tim va click nut Verify bang anh base64 + OpenCV template matching."""
 
-        # --- Doi loading "Verifying browser..." bien mat ---
+        # --- Doi iframe content load + loading text bien mat ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
-                    loading_sel = '#text-loading, .text.loading, [class*="loading"]'
+                    # Doi iframe content load (cho bat ky element nao xuat hien)
+                    self._step("Doi iframe content load...")
                     try:
-                        loading_el = await frame.wait_for_selector(loading_sel, timeout=3000)
-                        if loading_el:
-                            self._step("Doi 'Verifying browser...' bien mat...")
-                            await loading_el.wait_for(state="hidden", timeout=15000)
-                            self._step("Loading done - CAPTCHA da san sang")
+                        await frame.wait_for_selector("body", state="attached", timeout=10000)
+                        self._step("Iframe content da load")
                     except Exception:
-                        pass
-        except Exception:
-            pass
+                        self._step("Iframe content load timeout")
+
+                    # Tim text loading "Verifying browser..."
+                    loading_sel = "#text-loading, .text.loading, p.loading"
+                    try:
+                        loading_el = await frame.wait_for_selector(loading_sel, timeout=5000)
+                        if loading_el:
+                            text = (await loading_el.inner_text()).strip()
+                            self._step(f"Phat hien: '{text}' - dang doi bien mat...")
+                            await loading_el.wait_for(state="hidden", timeout=15000)
+                            self._step("Loading da bien mat - CAPTCHA san sang")
+                        else:
+                            self._step("Khong thay text loading (da san sang)")
+                    except Exception:
+                        self._step("Khong thay text loading (timeout - co the da san sang)")
+        except Exception as e:
+            self._step(f"Loi doi iframe: {e}")
 
         # --- Click bang anh ---
         try:
@@ -380,17 +430,22 @@ class RobloxCaptchaCollector:
         except Exception:
             pass
 
-        # --- Fallback: click giua iframe ---
+        # --- Fallback: tim button va click force ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
-                    box = await iframe_el.bounding_box()
-                    if box:
-                        cx, cy = box["width"] // 2, box["height"] // 2
-                        self._step(f"Fallback: click giua iframe ({cx}, {cy})")
-                        await frame.click(position={"x": cx, "y": cy}, timeout=3000)
+                    btn = await frame.wait_for_selector(
+                        'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")',
+                        timeout=5000,
+                    )
+                    if btn:
+                        await btn.scroll_into_view_if_needed()
+                        await btn.hover()
+                        await asyncio.sleep(0.2)
+                        await btn.click(force=True, timeout=3000)
+                        self._step("Fallback: clicked button (force)")
                         await asyncio.sleep(3)
                         return True
         except Exception:
@@ -430,7 +485,7 @@ class RobloxCaptchaCollector:
                     launch_opts["proxy"] = proxy_cfg
 
                 browser = await p.chromium.launch(**launch_opts)
-                self._step("✅ Browser đã mở")
+                self._step("Browser da mo")
 
                 for round_num in range(target):
                     if _shutdown.is_set():
@@ -438,7 +493,7 @@ class RobloxCaptchaCollector:
 
                     context = None
                     try:
-                        self._step(f"🔄 Vòng #{round_num+1} — đang mở tab mới...")
+                        self._step(f"Vong #{round_num+1} - mo tab moi...")
                         context = await browser.new_context(
                             viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -448,33 +503,34 @@ class RobloxCaptchaCollector:
                         await page.add_init_script(self.STEALTH_JS)
 
                         # (1) Vào Roblox login
-                        self._step("🌐 Đang load trang Roblox login...")
+                        self._step("Dang load trang login...")
                         await page.goto(self.ROBLOX_LOGIN_URL, wait_until="networkidle", timeout=30000)
                         await asyncio.sleep(2)
-                        self._step("✅ Trang login đã load xong")
+                        self._step("Trang login da load xong")
 
                         # (2) Điền form
-                        self._step(f"📝 Đang điền username: {self.username}")
+                        self._step(f"Dien username: {self.username}")
                         await self._fill_login_form(page)
                         await asyncio.sleep(0.3)
-                        self._step("✅ Đã điền username + password")
+                        self._step("Da dien username + password")
 
                         # (3) Bấm Login
-                        self._step("🖱️ Đang bấm nút Login...")
+                        self._step("Bam nut Login...")
                         await self._click_login(page)
-                        self._step("✅ Đã bấm Login — đang đợi CAPTCHA...")
+                        self._step("Da bam Login - doi CAPTCHA...")
 
                         # (4) Đợi CAPTCHA iframe xuất hiện
                         captcha_appeared = False
                         try:
+                            self._step("Doi CAPTCHA iframe xuat hien...")
                             await page.wait_for_selector(
                                 self.SEL_CAPTCHA_IFRAME,
                                 timeout=self.cfg["captcha_timeout_sec"] * 1000,
                             )
                             captcha_appeared = True
-                            self._step("✅ Đã phát hiện iframe CAPTCHA!")
+                            self._step("Da phat hien iframe CAPTCHA")
                         except Exception:
-                            self._step("❌ Không thấy iframe CAPTCHA — bỏ qua vòng này")
+                            self._step("Khong thay iframe CAPTCHA - bo qua vong nay")
                             continue
 
                         await asyncio.sleep(1)
@@ -490,7 +546,7 @@ class RobloxCaptchaCollector:
                             await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
 
                         # (6) Chụp & detect
-                        self._step("📸 Đang chụp ảnh CAPTCHA...")
+                        self._step("Dang chup anh CAPTCHA...")
                         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                         captcha_results = await self._capture_iframe(page, round_num, ts)
 
@@ -498,13 +554,13 @@ class RobloxCaptchaCollector:
                             captured_all.extend(captcha_results)
                             self.total_captured += len(captcha_results)
                             types = set(r["type"] for r in captcha_results)
-                            self._step(f"✅ Chụp xong: +{len(captcha_results)} ảnh ({', '.join(types)})")
+                            self._step(f"Chup xong: +{len(captcha_results)} anh ({', '.join(types)})")
                             logger.info(
                                 f"[{self.username}] #{self.total_captured} | "
                                 f"+{len(captcha_results)} ảnh ({', '.join(types)})"
                             )
                         else:
-                            self._step("❌ Không chụp được ảnh nào!")
+                            self._step("Khong chup duoc anh nao")
 
                     except Exception as e:
                         err_msg = str(e)
