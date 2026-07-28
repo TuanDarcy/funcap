@@ -460,12 +460,20 @@ class RobloxCaptchaCollector:
                     f"--window-size={self.cfg['viewport_width']},{self.cfg['viewport_height']}",
                 ]
 
-                # Load CAPTCHA solver extension neu co
+                # Load CAPTCHA solver extension (relative to BASE_DIR hoac absolute)
                 ext_path = self.cfg.get("extension_path", "")
-                if ext_path and Path(ext_path).exists():
-                    browser_args.append(f"--disable-extensions-except={ext_path}")
-                    browser_args.append(f"--load-extension={ext_path}")
-                    self._step(f"Loaded extension: {ext_path}")
+                if ext_path:
+                    ext_path = Path(ext_path)
+                    if not ext_path.is_absolute():
+                        ext_path = BASE_DIR / ext_path
+                    ext_path = ext_path.resolve()
+                    if ext_path.exists():
+                        ext_str = str(ext_path)
+                        browser_args.append(f"--disable-extensions-except={ext_str}")
+                        browser_args.append(f"--load-extension={ext_str}")
+                        self._step(f"Loaded extension: {ext_path.name}")
+                    else:
+                        self._step(f"Extension not found: {ext_path}")
 
                 context = await p.chromium.launch_persistent_context(
                     user_data_dir=str(user_data),

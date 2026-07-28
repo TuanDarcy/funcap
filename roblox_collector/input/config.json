@@ -8,9 +8,9 @@
   "use_proxy": false,
   "proxy_mode": "per_tab",
   "captcha_timeout_sec": 15,
-  "click_to_reveal": true,
+  "click_to_reveal": false,
   "click_delay_sec": 2.0,
   "debug": true,
   "debug_dir": "captured/_debug",
-  "extension_path": ""
+  "extension_path": "../omocaptcha-chrome-1.7.8-1784541091-9asmkp"
 }
