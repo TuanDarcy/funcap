@@ -116,12 +116,11 @@ class RobloxCaptchaCollector:
     # --- FunCAPTCHA iframe (Arkose Labs) ---
     SEL_CAPTCHA_IFRAME = '#game-core-frame, iframe[src*="arkose"], iframe[src*="funcaptcha"]'
 
-    # --- Nút "Start Puzzle" trong iframe ---
-    SEL_START_PUZZLE = (
-        '#root > div > div.sc-99cwso-0.sc-11w6f91-0.fcBZbp.eWRcSj.home.box.screen > button,'
-        'button[data-theme="home.verifyButton"],'
-        'button[aria-label*="Start Puzzle"]'
-    )
+    # --- Locator cho nested iframe (Roblox boc Arkose -> Arkose co game-core) ---
+    CAPTCHA_NESTED_SEL = "iframe[src*='arkoselabs']"
+
+    # --- Nut "Start Puzzle" trong iframe ---
+    SEL_START_PUZZLE = 'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")'
 
     # --- Asset ảnh base64 của nút Start Puzzle ---
     START_PUZZLE_B64 = (
@@ -408,7 +407,7 @@ class RobloxCaptchaCollector:
             btn = captcha.locator(
                 'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")'
             ).first
-            await btn.wait_for(state="visible", timeout=5000)
+            await btn.wait_for(state="visible", timeout=180000)
             await btn.scroll_into_view_if_needed()
             await btn.hover()
             await asyncio.sleep(0.3)
@@ -450,85 +449,70 @@ class RobloxCaptchaCollector:
 
         try:
             async with async_playwright() as p:
-                launch_opts = {
-                    "headless": self.cfg["headless"],
-                    "args": [
+                # Persistent context + playwright-stealth
+                user_data = BASE_DIR / "browser_profile" / self.username
+                user_data.mkdir(parents=True, exist_ok=True)
+
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data),
+                    headless=self.cfg["headless"],
+                    args=[
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
-                        "--disable-dev-shm-usage",
                         f"--window-size={self.cfg['viewport_width']},{self.cfg['viewport_height']}",
                     ],
-                }
+                    viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+                    locale="en-US",
+                )
 
-                proxy_cfg = None
-                if self.cfg.get("use_proxy", False) and self.proxy:
-                    proxy_cfg = self.parse_proxy(self.proxy)
-                if proxy_cfg:
-                    launch_opts["proxy"] = proxy_cfg
-
-                browser = await p.chromium.launch(**launch_opts)
-                self._step("Browser da mo")
+                try:
+                    from playwright_stealth import stealth_async
+                    page = context.pages[0] if context.pages else await context.new_page()
+                    await stealth_async(page)
+                    self._step("playwright-stealth ON")
+                except ImportError:
+                    page = context.pages[0] if context.pages else await context.new_page()
+                    self._step("stealth manual")
 
                 for round_num in range(target):
                     if _shutdown.is_set():
                         break
 
-                    context = None
                     try:
-                        self._step(f"Vong #{round_num+1} - mo tab moi...")
-                        context = await browser.new_context(
-                            viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
-                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-                            locale="en-US",
-                        )
                         page = await context.new_page()
-                        await page.add_init_script(self.STEALTH_JS)
+                        self._step(f"Vong #{round_num+1}")
 
-                        # (1) Vào Roblox login
-                        self._step("Dang load trang login...")
+                        # (1) Load login
                         await page.goto(self.ROBLOX_LOGIN_URL, wait_until="networkidle", timeout=30000)
                         await asyncio.sleep(2)
-                        self._step("Trang login da load xong")
+                        self._step("Login loaded")
 
-                        # (2) Điền form
-                        self._step(f"Dien username: {self.username}")
+                        # (2) Fill form
                         await self._fill_login_form(page)
                         await asyncio.sleep(0.3)
-                        self._step("Da dien username + password")
 
-                        # (3) Bấm Login
-                        self._step("Bam nut Login...")
+                        # (3) Click login
                         await self._click_login(page)
-                        self._step("Da bam Login - doi CAPTCHA...")
+                        self._step("Clicked login - waiting CAPTCHA...")
 
-                        # (4) Đợi CAPTCHA iframe xuất hiện
-                        captcha_appeared = False
+                        # (4) Wait CAPTCHA
                         try:
-                            self._step("Doi CAPTCHA iframe xuat hien...")
-                            await page.wait_for_selector(
-                                self.SEL_CAPTCHA_IFRAME,
-                                timeout=self.cfg["captcha_timeout_sec"] * 1000,
-                            )
-                            captcha_appeared = True
-                            self._step("Da phat hien iframe CAPTCHA")
+                            await page.wait_for_selector(self.CAPTCHA_NESTED_SEL, timeout=self.cfg["captcha_timeout_sec"] * 1000)
+                            self._step("CAPTCHA iframe found")
                         except Exception:
-                            self._step("Khong thay iframe CAPTCHA - bo qua vong nay")
+                            self._step("No CAPTCHA - skip")
                             continue
 
                         await asyncio.sleep(1)
 
-                        # (5) Click Verify/Start Puzzle
-                        if self.cfg.get("click_to_reveal", True) and captcha_appeared:
-                            self._step("Dang tim nut Start Puzzle...")
+                        # (5) Click Start Puzzle
+                        if self.cfg.get("click_to_reveal", True):
                             clicked = await self._click_reveal_captcha(page, round_num)
-                            if clicked:
-                                self._step("Da click nut Verify - game dang hien...")
-                            else:
-                                self._step("Khong tim thay nut Verify - van thu chup...")
+                            self._step("Clicked Start Puzzle" if clicked else "Click failed")
                             await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
 
-                        # (6) Chụp & detect
-                        self._step("Dang chup anh CAPTCHA...")
+                        # (6) Capture
                         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                         captcha_results = await self._capture_iframe(page, round_num, ts)
 
@@ -536,39 +520,33 @@ class RobloxCaptchaCollector:
                             captured_all.extend(captcha_results)
                             self.total_captured += len(captcha_results)
                             types = set(r["type"] for r in captcha_results)
-                            self._step(f"Chup xong: +{len(captcha_results)} anh ({', '.join(types)})")
-                            logger.info(
-                                f"[{self.username}] #{self.total_captured} | "
-                                f"+{len(captcha_results)} ảnh ({', '.join(types)})"
-                            )
+                            logger.info(f"[{self.username}] #{self.total_captured} | +{len(captcha_results)} ({', '.join(types)})")
                         else:
-                            self._step("Khong chup duoc anh nao")
+                            self._step("No images captured")
 
                     except Exception as e:
-                        err_msg = str(e)
-                        if "Connection closed" in err_msg or "Target closed" in err_msg:
-                            logger.warning(f"[{self.username}] Browser crash, khởi động lại...")
-                            try:
-                                await browser.close()
-                            except Exception:
-                                pass
-                            browser = await p.chromium.launch(**launch_opts)
+                        err = str(e)
+                        if "Connection closed" in err or "Target closed" in err:
+                            logger.warning(f"[{self.username}] Restarting browser...")
+                            await context.close()
+                            context = await p.chromium.launch_persistent_context(
+                                user_data_dir=str(user_data), headless=self.cfg["headless"],
+                            )
                             continue
-                        logger.error(f"[{self.username}] Lỗi: {e}")
+                        logger.error(f"[{self.username}] {e}")
                     finally:
-                        if context:
-                            try:
-                                await context.close()
-                            except Exception:
-                                pass
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
                         await asyncio.sleep(self.cfg.get("reload_delay_sec", 2.0))
 
-                await browser.close()
+                await context.close()
 
         except Exception as e:
-            logger.error(f"[{self.username}] Browser crash: {e}")
+            logger.error(f"[{self.username}] Fatal: {e}")
 
-        logger.success(f"[{self.username}] Xong: {self.total_captured} ảnh")
+        logger.success(f"[{self.username}] Done: {self.total_captured} captures")
         return captured_all
 
     # -- Chụp CAPTCHA iframe (từng ảnh riêng lẻ) --

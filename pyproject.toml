@@ -23,6 +23,7 @@ dependencies = [
     "requests>=2.31",
     "selenium>=4.15",
     "playwright>=1.40",
+    "playwright-stealth>=1.0",
 ]
 
 [project.optional-dependencies]
