@@ -1,0 +1,10 @@
+# Proxies - Mỗi dòng 1 proxy
+# Format: 
+#   ip:port                    (VD: 192.168.1.1:8080)
+#   user:pass@ip:port          (VD: proxyuser:proxypass@10.0.0.1:3128)
+#   http://ip:port             (có thể có http:// phía trước)
+#
+# Nếu không có proxy nào, script sẽ chạy direct (không proxy)
+
+# 127.0.0.1:8080
+# proxyuser:proxypass@192.168.1.100:3128

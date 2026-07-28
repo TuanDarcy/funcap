@@ -48,3 +48,6 @@ wandb/
 # Other local tools (not part of funcap-solver)
 Acc Checker/
 Acc Gen/
+
+# Roblox collector captured images (too large for git)
+roblox_collector/captured/

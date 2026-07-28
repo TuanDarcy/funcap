@@ -1,0 +1,10 @@
+{
+  "threads": 5,
+  "headless": true,
+  "screenshot_quality": 95,
+  "max_retries_per_account": 3,
+  "wait_between_accounts_sec": 0.5,
+  "captcha_timeout_sec": 8,
+  "viewport_width": 500,
+  "viewport_height": 700
+}

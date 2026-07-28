@@ -1,0 +1,10 @@
+# Roblox Accounts - Mỗi dòng 1 account, format: username:password
+# Dòng bắt đầu bằng # sẽ bị bỏ qua
+# 
+# Cách dùng: 
+#   - Điền account thật để trigger CAPTCHA khi login sai pass
+#   - Hoặc dùng account fake cũng trigger được CAPTCHA
+
+# user1:password123
+# user2:password456
+# user3:password789
