@@ -384,74 +384,56 @@ class RobloxCaptchaCollector:
             self._step(f"Image click error: {e}")
             return False
 
-    # -- Click bang anh base64 (OpenCV) --
+    # -- Click bang anh base64 (OpenCV) + frame_locator --
 
     async def _click_reveal_captcha(self, page, round_num: int = 0):
-        """Tim va click nut Verify bang anh base64 + OpenCV template matching."""
+        """Click nut Start Puzzle trong iframe - dung frame_locator."""
 
-        # --- Doi iframe content load + loading text bien mat ---
+        # --- Dung frame_locator de truy cap iframe (cach Playwright chinh thong) ---
         try:
-            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if iframe_el:
-                frame = await iframe_el.content_frame()
-                if frame:
-                    # Doi iframe content load (cho bat ky element nao xuat hien)
-                    self._step("Doi iframe content load...")
-                    try:
-                        await frame.wait_for_selector("body", state="attached", timeout=10000)
-                        self._step("Iframe content da load")
-                    except Exception:
-                        self._step("Iframe content load timeout")
+            # frame_locator tim iframe #game-core-frame roi thao tac truc tiep ben trong
+            captcha = page.frame_locator(self.SEL_CAPTCHA_IFRAME)
 
-                    # Tim text loading "Verifying browser..."
-                    loading_sel = "#text-loading, .text.loading, p.loading"
-                    try:
-                        loading_el = await frame.wait_for_selector(loading_sel, timeout=5000)
-                        if loading_el:
-                            text = (await loading_el.inner_text()).strip()
-                            self._step(f"Phat hien: '{text}' - dang doi bien mat...")
-                            await loading_el.wait_for(state="hidden", timeout=15000)
-                            self._step("Loading da bien mat - CAPTCHA san sang")
-                        else:
-                            self._step("Khong thay text loading (da san sang)")
-                    except Exception:
-                        self._step("Khong thay text loading (timeout - co the da san sang)")
+            # Doi loading text bien mat
+            try:
+                loading = captcha.locator("#text-loading, .text.loading")
+                await loading.first.wait_for(state="visible", timeout=3000)
+                self._step("Phat hien loading text - dang doi bien mat...")
+                await loading.first.wait_for(state="hidden", timeout=15000)
+                self._step("Loading da bien mat")
+            except Exception:
+                self._step("Khong thay loading text (da san sang)")
+
+            # Tim button Start Puzzle
+            btn = captcha.locator(
+                'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")'
+            ).first
+            await btn.wait_for(state="visible", timeout=5000)
+            await btn.scroll_into_view_if_needed()
+            await btn.hover()
+            await asyncio.sleep(0.3)
+            await btn.click(force=True, timeout=3000)
+            self._step("Da click Start Puzzle (frame_locator)")
+            await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+            return True
+
         except Exception as e:
-            self._step(f"Loi doi iframe: {e}")
+            self._step(f"frame_locator click error: {e}")
 
-        # --- Click bang anh ---
+        # --- Fallback: JS click ---
         try:
-            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if iframe_el:
-                frame = await iframe_el.content_frame()
-                if frame:
-                    if await self._click_by_image(iframe_el, frame, round_num):
-                        return True
+            captcha = page.frame_locator(self.SEL_CAPTCHA_IFRAME)
+            btn = captcha.locator(
+                'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")'
+            ).first
+            await btn.evaluate("el => el.click()")
+            self._step("Clicked via JS evaluate")
+            await asyncio.sleep(3)
+            return True
         except Exception:
             pass
 
-        # --- Fallback: tim button va click force ---
-        try:
-            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
-            if iframe_el:
-                frame = await iframe_el.content_frame()
-                if frame:
-                    btn = await frame.wait_for_selector(
-                        'button[data-theme="home.verifyButton"], button:has-text("Start Puzzle")',
-                        timeout=5000,
-                    )
-                    if btn:
-                        await btn.scroll_into_view_if_needed()
-                        await btn.hover()
-                        await asyncio.sleep(0.2)
-                        await btn.click(force=True, timeout=3000)
-                        self._step("Fallback: clicked button (force)")
-                        await asyncio.sleep(3)
-                        return True
-        except Exception:
-            pass
-
-        logger.warning(f"[{self.username}] KHONG tim thay nut Verify!")
+        logger.warning(f"[{self.username}] KHONG click duoc nut Verify!")
         return False
 
     # -- Main loop --
@@ -592,46 +574,52 @@ class RobloxCaptchaCollector:
     # -- Chụp CAPTCHA iframe (từng ảnh riêng lẻ) --
 
     async def _capture_iframe(self, page, round_num: int, ts: str) -> List[Dict]:
-        """Chụp key-frame + từng ảnh lựa chọn (Image 1 of 5, ...)."""
+        """Chup key-frame + tung anh lua chon bang frame_locator."""
         if _shutdown.is_set():
             return []
 
         results = []
 
         try:
-            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if not iframe_el:
-                return results
+            captcha = page.frame_locator(self.SEL_CAPTCHA_IFRAME)
 
-            frame = await iframe_el.content_frame()
-            if not frame:
-                return results
-
-            game_type = await self._detect_game_type(frame, iframe_el)
+            # Detect game type from iframe content
+            game_type = "unknown"
+            try:
+                html = await captcha.locator("body").inner_text()
+                html_lower = html.lower()
+                for gtype, keywords in self.GAME_TYPE_KEYWORDS.items():
+                    if any(kw in html_lower for kw in keywords):
+                        game_type = gtype
+                        break
+            except Exception:
+                pass
 
             type_dir = CAPTURED_DIR / game_type
             type_dir.mkdir(parents=True, exist_ok=True)
 
-            # --- 1. Chụp "Match This!" key frame ---
+            # --- 1. Chup key-frame ---
             try:
-                key_img = await frame.wait_for_selector(self.SEL_KEY_FRAME, timeout=3000)
-                if key_img:
-                    key_path = type_dir / f"{self.username}_r{round_num}_key_{ts}.png"
-                    await key_img.screenshot(path=str(key_path))
-                    results.append({"image_path": str(key_path), "type": f"{game_type}_keyframe",
-                                    "username": self.username, "round": round_num + 1, "ts": ts})
+                key = captcha.locator(self.SEL_KEY_FRAME).first
+                await key.wait_for(state="visible", timeout=2000)
+                key_path = type_dir / f"{self.username}_r{round_num}_key_{ts}.png"
+                await key.screenshot(path=str(key_path))
+                results.append({"image_path": str(key_path), "type": f"{game_type}_keyframe",
+                                "username": self.username, "round": round_num + 1, "ts": ts})
             except Exception:
                 pass
 
-            # --- 2. Chụp TỪNG ảnh lựa chọn: Image 1 of 5, Image 2 of 5, ... ---
+            # --- 2. Chup tung anh lua chon ---
             try:
-                choice_imgs = await frame.locator(self.SEL_CHOICE_IMAGES).all()
-                for img_el in choice_imgs:
-                    aria_label = await img_el.get_attribute("aria-label") or f"choice_{round_num}"
+                choices = captcha.locator(self.SEL_CHOICE_IMAGES)
+                count = await choices.count()
+                for i in range(count):
+                    img = choices.nth(i)
+                    aria_label = await img.get_attribute("aria-label") or f"choice_{i}"
                     safe_name = aria_label.replace(" ", "_").replace(".", "").replace(":", "")[:30]
                     choice_path = type_dir / f"{self.username}_r{round_num}_{safe_name}_{ts}.png"
                     try:
-                        await img_el.screenshot(path=str(choice_path))
+                        await img.screenshot(path=str(choice_path))
                         results.append({"image_path": str(choice_path), "type": f"{game_type}_choice",
                                         "aria_label": aria_label, "username": self.username,
                                         "round": round_num + 1, "ts": ts})
@@ -640,17 +628,14 @@ class RobloxCaptchaCollector:
             except Exception:
                 pass
 
-            # --- 3. Fallback: chụp toàn bộ game ---
+            # --- 3. Fallback ---
             if not results:
                 game_path = type_dir / f"{self.username}_r{round_num}_full_{ts}.png"
                 try:
-                    area = await frame.wait_for_selector(self.SEL_GAME_AREA, timeout=3000)
-                    if area:
-                        await area.screenshot(path=str(game_path))
-                    else:
-                        await frame.screenshot(path=str(game_path))
+                    area = captcha.locator(self.SEL_GAME_AREA).first
+                    await area.screenshot(path=str(game_path))
                 except Exception:
-                    await frame.screenshot(path=str(game_path))
+                    pass
                 results.append({"image_path": str(game_path), "type": game_type,
                                 "username": self.username, "round": round_num + 1, "ts": ts})
 
