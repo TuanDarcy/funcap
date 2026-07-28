@@ -207,9 +207,11 @@ class RobloxCaptchaCollector:
                     # ---- Step 4: Wait for FunCAPTCHA ----
                     await asyncio.sleep(3)
 
-                    # Save full page screenshot
+                    # Save full page screenshot vào folder debug
                     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-                    full_page_path = self.output_dir / f"roblox_full_{username}_{ts}.png"
+                    full_dir = self.output_dir / "_fullpage"
+                    full_dir.mkdir(parents=True, exist_ok=True)
+                    full_page_path = full_dir / f"roblox_full_{username}_{ts}.png"
                     await page.screenshot(path=str(full_page_path), full_page=True)
 
                     # Try to capture CAPTCHA iframe specifically
@@ -220,7 +222,9 @@ class RobloxCaptchaCollector:
                         logger.success(f"[{username}] ✓ Captured {len(captcha_found)} CAPTCHA image(s) via {self.proxy or 'direct'}")
                     else:
                         # Maybe login succeeded (no CAPTCHA) or page structure changed
-                        # Save screenshot anyway
+                        # Save screenshot anyway vào folder no_captcha
+                        no_cap_dir = self.output_dir / "no_captcha"
+                        no_cap_dir.mkdir(parents=True, exist_ok=True)
                         logger.info(f"[{username}] No CAPTCHA detected (login may have succeeded)")
                         captured.append({
                             "image_path": str(full_page_path),
@@ -241,11 +245,21 @@ class RobloxCaptchaCollector:
         return captured
 
     async def _capture_captcha_iframe(self, page, username: str, ts: str) -> List[Dict]:
-        """Extract and screenshot the FunCAPTCHA iframe/game area."""
+        """
+        Extract and screenshot the FunCAPTCHA iframe/game area.
+
+        Ảnh được lưu vào folder con theo loại game đã detect được:
+          data/raw/rotate_animal/game_user_xxx.png
+          data/raw/shadow_match/game_user_xxx.png
+          ...
+
+        ⚠️ QUAN TRỌNG: Auto-detect có thể SAI! Sau khi collect xong, dùng tool
+        labeling để kiểm tra và sửa lại:
+          python -m funcap_solver.data.labeler --input data/raw --output data/labeled
+        """
         results = []
 
         try:
-            # FunCAPTCHA renders inside an iframe from *.arkoselabs.com or *.funcaptcha.com
             iframe_element = await page.wait_for_selector(
                 'iframe[src*="arkose"], iframe[src*="funcaptcha"], iframe[src*="arkoselabs"]',
                 timeout=8000,
@@ -254,11 +268,10 @@ class RobloxCaptchaCollector:
             if not iframe_element:
                 return results
 
-            # Get iframe content
             frame = await iframe_element.content_frame()
             if not frame:
-                # Screenshot the iframe element itself
-                captcha_path = self.output_dir / f"captcha_{username}_{ts}.png"
+                captcha_path = self.output_dir / "unknown" / f"captcha_{username}_{ts}.png"
+                captcha_path.parent.mkdir(parents=True, exist_ok=True)
                 await iframe_element.screenshot(path=str(captcha_path))
                 results.append({
                     "image_path": str(captcha_path),
@@ -272,11 +285,13 @@ class RobloxCaptchaCollector:
             # ---- Detect game type ----
             game_type = await self._detect_game_type(frame)
 
-            # ---- Screenshot game area ----
-            game_path = self.output_dir / f"game_{username}_{game_type}_{ts}.png"
+            # ---- LƯU VÀO FOLDER THEO LOẠI ----
+            type_dir = self.output_dir / game_type
+            type_dir.mkdir(parents=True, exist_ok=True)
+
+            game_path = type_dir / f"game_{username}_{ts}.png"
 
             try:
-                # Try to screenshot just the game canvas
                 game_area = await frame.wait_for_selector(
                     'canvas, img[src*="game"], [class*="game-image"], [class*="challenge"]',
                     timeout=3000,
@@ -286,7 +301,6 @@ class RobloxCaptchaCollector:
                 else:
                     await frame.screenshot(path=str(game_path))
             except Exception:
-                # Fallback: screenshot entire iframe
                 try:
                     await frame.screenshot(path=str(game_path))
                 except Exception:
@@ -304,7 +318,7 @@ class RobloxCaptchaCollector:
                 "timestamp": ts,
             })
 
-            # ---- Also capture individual tiles (for select_tiles type) ----
+            # ---- Tiles cho select_tiles ----
             tile_results = await self._capture_tiles(frame, username, game_type, ts)
             results.extend(tile_results)
 
@@ -376,9 +390,10 @@ class RobloxCaptchaCollector:
         """For tile-selection games, capture individual tile images."""
         results = []
         try:
+            type_dir = self.output_dir / game_type
             tiles = await frame.locator('[class*="tile"], [class*="image-cell"], [class*="grid-item"]').all()
-            for i, tile in enumerate(tiles[:9]):  # Max 9 tiles
-                tile_path = self.output_dir / f"tile_{username}_{game_type}_{i}_{ts}.png"
+            for i, tile in enumerate(tiles[:9]):
+                tile_path = type_dir / f"tile_{username}_{game_type}_{i}_{ts}.png"
                 try:
                     await tile.screenshot(path=str(tile_path))
                     results.append({

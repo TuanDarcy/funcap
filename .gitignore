@@ -44,3 +44,7 @@ wandb/
 
 # Logs
 *.log
+
+# Other local tools (not part of funcap-solver)
+Acc Checker/
+Acc Gen/
