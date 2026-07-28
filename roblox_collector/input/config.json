@@ -1,10 +1,51 @@
 {
+  "_comment": "=== FunCAPTCHA Collector Config v2 ===",
+
   "threads": 5,
+  "_threads_desc": "So browser chay cung luc",
+
+  "captchas_per_account": 20,
+  "_captchas_per_account_desc": "⭐ Moi account thu thap bao nhieu CAPTCHA roi next. Moi lan reload -> CAPTCHA moi -> chup lai.",
+
+  "reload_delay_sec": 2.0,
+  "_reload_delay_desc": "Delay giua cac lan reload (giay)",
+
   "headless": true,
-  "screenshot_quality": 95,
-  "max_retries_per_account": 3,
-  "wait_between_accounts_sec": 0.5,
-  "captcha_timeout_sec": 8,
+  "_headless_desc": "An browser (false = hien de debug)",
+
   "viewport_width": 500,
-  "viewport_height": 700
+  "viewport_height": 700,
+  "_viewport_desc": "Kich thuoc cua so browser",
+
+  "use_proxy": true,
+  "_use_proxy_desc": "⭐ Co dung proxy khong? false = chay direct ko can proxy",
+
+  "proxy_mode": "per_tab",
+  "_proxy_mode_desc": "⭐ 'per_tab': moi tab 1 proxy | 'per_account': moi account 1 proxy | 'round_robin': xoay vong",
+
+  "captcha_timeout_sec": 15,
+  "_captcha_timeout_desc": "⭐ Thoi gian doi CAPTCHA load (giay). Tang len neu proxy cham.",
+
+  "click_to_reveal": true,
+  "_click_to_reveal_desc": "⭐ Co click vao CAPTCHA widget de game hien ra khong",
+
+  "click_delay_sec": 2.0,
+  "_click_delay_desc": "Delay sau khi click CAPTCHA (giay)",
+
+  "login_selectors": {
+    "_desc": "⭐ CSS selectors cho form login Roblox. Neu Roblox doi HTML -> sua o day.",
+    "username": "#login-username",
+    "password": "#login-password",
+    "submit_button": "#login-button",
+    "fallback_username": "input[name=\"username\"]",
+    "fallback_password": "input[name=\"password\"]",
+    "fallback_submit": "button[type=\"submit\"]"
+  },
+
+  "captcha_selectors": {
+    "_desc": "⭐ CSS selectors cho FunCAPTCHA. Neu Arkose doi cau truc -> sua o day.",
+    "iframe": "iframe[src*=\"arkose\"], iframe[src*=\"funcaptcha\"], iframe[src*=\"arkoselabs\"]",
+    "game_area": "canvas, img[src*=\"game\"], [class*=\"game\"], [class*=\"challenge\"]",
+    "click_target": "button, [class*=\"start\"], [class*=\"play\"], [class*=\"begin\"]"
+  }
 }
