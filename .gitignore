@@ -51,3 +51,9 @@ Acc Gen/
 
 # Roblox collector captured images (too large for git)
 roblox_collector/captured/
+
+# Browser profiles (user data)
+roblox_collector/browser_profile/
+
+# Assets
+roblox_collector/input/assets/

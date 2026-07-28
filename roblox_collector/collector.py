@@ -84,6 +84,7 @@ DEFAULT_CONFIG = {
     "click_delay_sec": 2.0,
     "debug": True,
     "debug_dir": "captured/_debug",
+    "extension_path": "",
 }
 
 # --- Class folders ---
@@ -449,18 +450,27 @@ class RobloxCaptchaCollector:
 
         try:
             async with async_playwright() as p:
-                # Persistent context + playwright-stealth
+                # --- Persistent context + optional CAPTCHA solver extension ---
                 user_data = BASE_DIR / "browser_profile" / self.username
                 user_data.mkdir(parents=True, exist_ok=True)
+
+                browser_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    f"--window-size={self.cfg['viewport_width']},{self.cfg['viewport_height']}",
+                ]
+
+                # Load CAPTCHA solver extension neu co
+                ext_path = self.cfg.get("extension_path", "")
+                if ext_path and Path(ext_path).exists():
+                    browser_args.append(f"--disable-extensions-except={ext_path}")
+                    browser_args.append(f"--load-extension={ext_path}")
+                    self._step(f"Loaded extension: {ext_path}")
 
                 context = await p.chromium.launch_persistent_context(
                     user_data_dir=str(user_data),
                     headless=self.cfg["headless"],
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        f"--window-size={self.cfg['viewport_width']},{self.cfg['viewport_height']}",
-                    ],
+                    args=browser_args,
                     viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
                     locale="en-US",

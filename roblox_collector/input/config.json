@@ -10,6 +10,7 @@
   "captcha_timeout_sec": 15,
   "click_to_reveal": true,
   "click_delay_sec": 2.0,
-  "debug": false,
-  "debug_dir": "captured/_debug"
+  "debug": true,
+  "debug_dir": "captured/_debug",
+  "extension_path": ""
 }
