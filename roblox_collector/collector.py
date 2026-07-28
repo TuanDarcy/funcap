@@ -329,8 +329,8 @@ class RobloxCaptchaCollector:
             result = cv2.matchTemplate(screenshot_bgr, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            if max_val < 0.7:
-                self._step(f"🔍 Image match confidence: {max_val:.2f} < 0.7 — bỏ qua")
+            if max_val < 0.5:
+                self._step(f"Match confidence: {max_val:.2f} < 0.5 — bo qua")
                 return False
 
             # Click giữa template
@@ -414,22 +414,31 @@ class RobloxCaptchaCollector:
                                 btn = await frame.wait_for_selector(sel, timeout=1500)
                             if btn:
                                 text = (await btn.inner_text()).strip()
-                                logger.info(f"[{self.username}] Đã click nút: '{text}'")
+                                logger.info(f"[{self.username}] Click: '{text}' (method={method})")
                                 await btn.click(timeout=3000)
                                 await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
                                 return True
                         except Exception:
                             continue
+            self._step("Da thu het text/role/xpath/css — khong tim thay nut")
         except Exception:
             pass
 
-        # --- Cách 2: Click trực tiếp vào iframe ---
+        # --- Cach 2: Click vao nut trong iframe (khong click iframe element) ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
-                await iframe_el.click(timeout=3000)
-                await asyncio.sleep(3)
-                return True
+                frame = await iframe_el.content_frame()
+                if frame:
+                    # Thu click vao giua man hinh iframe - noi nut Start Puzzle thuong nam
+                    box = await iframe_el.bounding_box()
+                    if box:
+                        cx = box["width"] // 2
+                        cy = box["height"] // 2
+                        self._step(f"Click vao giua iframe ({cx}, {cy})")
+                        await frame.click(position={"x": cx, "y": cy}, timeout=3000)
+                        await asyncio.sleep(3)
+                        return True
         except Exception:
             pass
 
@@ -518,12 +527,12 @@ class RobloxCaptchaCollector:
 
                         # (5) Click Verify/Start Puzzle
                         if self.cfg.get("click_to_reveal", True) and captcha_appeared:
-                            self._step("🔍 Đang tìm nút Start Puzzle...")
+                            self._step("Dang tim nut Start Puzzle...")
                             clicked = await self._click_reveal_captcha(page, round_num)
                             if clicked:
-                                self._step("✅ Đã click Start Puzzle — game đang hiện...")
+                                self._step("Da click nut Verify - game dang hien...")
                             else:
-                                self._step("⚠️ Không tìm thấy nút Verify — vẫn thử chụp...")
+                                self._step("Khong tim thay nut Verify - van thu chup...")
                             await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
 
                         # (6) Chụp & detect
