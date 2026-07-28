@@ -295,7 +295,8 @@ class RobloxCaptchaCollector:
                 frame = await iframe_el.content_frame()
                 if frame:
                     verify_selectors = [
-                        self.SEL_START_PUZZLE,
+                        'xpath=/html/body/div/div/div[1]/button',
+                        '#root > div > div.sc-99cwso-0.sc-11w6f91-0.fcBZbp.eWRcSj.home.box.screen > button',
                         'button[data-theme="home.verifyButton"]',
                         'button:has-text("Start Puzzle")',
                         'button:has-text("Verify")',
@@ -305,7 +306,11 @@ class RobloxCaptchaCollector:
                     ]
                     for sel in verify_selectors:
                         try:
-                            btn = await frame.wait_for_selector(sel, timeout=2000)
+                            if sel.startswith("xpath="):
+                                btn = await frame.locator(sel).first
+                                await btn.wait_for(state="visible", timeout=2000)
+                            else:
+                                btn = await frame.wait_for_selector(sel, timeout=2000)
                             if btn:
                                 text = (await btn.inner_text()).strip()
                                 logger.info(f"[{self.username}] Đã click nút: '{text}'")
