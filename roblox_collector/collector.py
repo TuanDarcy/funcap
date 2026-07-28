@@ -52,45 +52,19 @@ CONFIG_PATH = INPUT_DIR / "config.json"
 ACCOUNTS_PATH = INPUT_DIR / "accounts.txt"
 PROXIES_PATH = INPUT_DIR / "proxies.txt"
 
-# --- Default config ---
+# --- Default config (behavior only, no selectors) ---
 DEFAULT_CONFIG = {
-    # -- Threading --
     "threads": 5,
-
-    # -- Collection loop --
-    "captchas_per_account": 20,       # Moi account thu thap bao nhieu CAPTCHA roi next
-    "reload_delay_sec": 2.0,          # Delay sau khi reload trang
-
-    # -- Browser --
+    "captchas_per_account": 20,
+    "reload_delay_sec": 2.0,
     "headless": True,
     "viewport_width": 500,
     "viewport_height": 700,
-
-    # -- Proxy --
-    "use_proxy": True,                # Co dung proxy khong
-    "proxy_mode": "per_tab",          # "per_tab" | "per_account" | "round_robin"
-
-    # -- CAPTCHA --
-    "captcha_timeout_sec": 15,        # Thoi gian doi CAPTCHA load (tang neu proxy cham)
-    "click_to_reveal": True,          # Co can click vao CAPTCHA de hien game khong
-    "click_delay_sec": 2.0,           # Delay sau khi click CAPTCHA
-
-    # -- Login form selectors --
-    "login_selectors": {
-        "username": "#login-username",
-        "password": "#login-password",
-        "submit_button": "#login-button",
-        "fallback_username": "input[name=\"username\"]",
-        "fallback_password": "input[name=\"password\"]",
-        "fallback_submit": "button[type=\"submit\"]",
-    },
-
-    # -- CAPTCHA selectors --
-    "captcha_selectors": {
-        "iframe": "iframe[src*=\"arkose\"], iframe[src*=\"funcaptcha\"], iframe[src*=\"arkoselabs\"]",
-        "game_area": "canvas, img[src*=\"game\"], [class*=\"game\"], [class*=\"challenge\"]",
-        "click_target": "button, [class*=\"start\"], [class*=\"play\"], [class*=\"begin\"]",
-    },
+    "use_proxy": True,
+    "proxy_mode": "per_tab",
+    "captcha_timeout_sec": 15,
+    "click_to_reveal": True,
+    "click_delay_sec": 2.0,
 }
 
 # --- Class folders ---
@@ -110,6 +84,30 @@ class RobloxCaptchaCollector:
        Vong lap: login -> CAPTCHA -> chup -> reload -> lap N lan."""
 
     ROBLOX_LOGIN_URL = "https://www.roblox.com/login"
+
+    # ═══ CSS Selectors (hardcode trong code, sua truc tiep neu Roblox/Arkose doi HTML) ═══
+    # --- Login form ---
+    SEL_USERNAME = "#login-username"
+    SEL_PASSWORD = "#login-password"
+    SEL_SUBMIT = "#login-button"
+    SEL_USERNAME_FB = 'input[name="username"]'       # fallback
+    SEL_PASSWORD_FB = 'input[name="password"]'       # fallback
+    SEL_SUBMIT_FB = 'button[type="submit"]'          # fallback
+
+    # --- FunCAPTCHA iframe ---
+    SEL_CAPTCHA_IFRAME = 'iframe[src*="arkose"], iframe[src*="funcaptcha"], iframe[src*="arkoselabs"]'
+    SEL_GAME_AREA = 'canvas, img[src*="game"], [class*="game"], [class*="challenge"]'
+    SEL_CLICK_TARGET = 'button, [class*="start"], [class*="play"], [class*="begin"]'
+
+    # --- Game type detection keywords ---
+    GAME_TYPE_KEYWORDS = {
+        "rotate_animal": ["rotate", "upright", "orientation"],
+        "shadow_match": ["shadow"],
+        "select_tiles": ["select", "tile"],
+        "match_object": ["match"],
+        "pick_image": ["pick", "choose"],
+        "count_objects": ["count", "how many"],
+    }
 
     def __init__(self, username: str, password: str, proxy: Optional[str] = None, config: dict = None):
         self.username = username
@@ -148,65 +146,103 @@ class RobloxCaptchaCollector:
         Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
     """
 
-    # -- Detect game type --
+    # -- Detect game type (từ source HTML trong iframe) --
 
-    async def _detect_game_type(self, frame) -> str:
+    async def _detect_game_type(self, frame, iframe_el=None) -> str:
+        """
+        Đọc game type từ source của FunCAPTCHA iframe.
+        Thứ tự ưu tiên:
+          1. HTML source của iframe (F12 -> thấy data-game-type, meta tags...)
+          2. URL params của iframe (data=... base64)
+          3. Text hiển thị trên màn hình
+        """
         try:
-            text = (await frame.locator("body").inner_text()).lower()
-            if "rotate" in text or "upright" in text or "orientation" in text:
-                return "rotate_animal"
-            if "shadow" in text:
-                return "shadow_match"
-            if "select" in text and "tile" in text:
-                return "select_tiles"
-            if "match" in text:
-                return "match_object"
-            if "pick" in text or "choose" in text:
-                return "pick_image"
-            if "count" in text or "how many" in text:
-                return "count_objects"
+            # ── Cách 1: Đọc toàn bộ HTML source ──
+            html = (await frame.content()).lower()
+
+            # Tìm data attributes chứa game type
+            # FunCAPTCHA thường nhúng: data-game-type="..." hoặc data-challenge-type="..."
+            import re
+            for attr in ['data-game-type', 'data-challenge-type', 'data-puzzle-type', 'data-type']:
+                m = re.search(rf'{attr}=["\']([^"\']+)', html)
+                if m:
+                    val = m.group(1).lower()
+                    for gtype, keywords in self.GAME_TYPE_KEYWORDS.items():
+                        if any(kw in val for kw in keywords):
+                            logger.debug(f"Detected via {attr}: {gtype}")
+                            return gtype
+
+            # Tìm trong meta tags
+            for meta in ['game-type', 'challenge-type']:
+                m = re.search(rf'<meta[^>]+name=["\']{meta}["\'][^>]+content=["\']([^"\']+)', html)
+                if m:
+                    val = m.group(1).lower()
+                    for gtype, keywords in self.GAME_TYPE_KEYWORDS.items():
+                        if any(kw in val for kw in keywords):
+                            return gtype
+
+            # ── Cách 2: Parse URL data param (base64) ──
+            if iframe_el:
+                try:
+                    src = await iframe_el.get_attribute("src") or ""
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(src)
+                    params = parse_qs(parsed.query)
+                    data_blob = params.get("data", [None])[0]
+                    if data_blob:
+                        import base64
+                        decoded = base64.b64decode(data_blob).decode("utf-8", errors="ignore").lower()
+                        for gtype, keywords in self.GAME_TYPE_KEYWORDS.items():
+                            if any(kw in decoded for kw in keywords):
+                                logger.debug(f"Detected via iframe URL data: {gtype}")
+                                return gtype
+                except Exception:
+                    pass
+
+            # ── Cách 3: Keyword matching trong text ──
+            for gtype, keywords in self.GAME_TYPE_KEYWORDS.items():
+                for kw in keywords:
+                    if kw in html:
+                        return gtype
+
         except Exception:
             pass
+
         return "unknown"
 
     # -- Fill login form --
 
     async def _fill_login_form(self, page):
-        sel = self.cfg.get("login_selectors", {})
         try:
-            await page.fill(sel.get("username", "#login-username"), self.username, timeout=5000)
+            await page.fill(self.SEL_USERNAME, self.username, timeout=5000)
         except Exception:
             try:
-                await page.fill(sel.get("fallback_username", 'input[name="username"]'), self.username, timeout=5000)
+                await page.fill(self.SEL_USERNAME_FB, self.username, timeout=5000)
             except Exception:
-                logger.warning(f"[{self.username}] Khong dien duoc username")
+                logger.warning(f"[{self.username}] Không điền được username")
 
         try:
-            await page.fill(sel.get("password", "#login-password"), self.password, timeout=5000)
+            await page.fill(self.SEL_PASSWORD, self.password, timeout=5000)
         except Exception:
             try:
-                await page.fill(sel.get("fallback_password", 'input[name="password"]'), self.password, timeout=5000)
+                await page.fill(self.SEL_PASSWORD_FB, self.password, timeout=5000)
             except Exception:
-                logger.warning(f"[{self.username}] Khong dien duoc password")
+                logger.warning(f"[{self.username}] Không điền được password")
 
     async def _click_login(self, page):
-        sel = self.cfg.get("login_selectors", {})
         try:
-            await page.click(sel.get("submit_button", "#login-button"), timeout=5000)
+            await page.click(self.SEL_SUBMIT, timeout=5000)
         except Exception:
             try:
-                await page.click(sel.get("fallback_submit", 'button[type="submit"]'), timeout=5000)
+                await page.click(self.SEL_SUBMIT_FB, timeout=5000)
             except Exception:
                 await page.keyboard.press("Enter")
 
     # -- Click to reveal CAPTCHA game --
 
     async def _click_reveal_captcha(self, page):
-        cap_sel = self.cfg.get("captcha_selectors", {})
         try:
-            iframe_el = await page.wait_for_selector(
-                cap_sel.get("iframe", 'iframe[src*="arkose"]'), timeout=5000,
-            )
+            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
                 await iframe_el.click(timeout=3000)
                 await asyncio.sleep(1)
@@ -214,17 +250,14 @@ class RobloxCaptchaCollector:
             pass
 
         try:
-            iframe_el = await page.wait_for_selector(
-                cap_sel.get("iframe", 'iframe[src*="arkose"]'), timeout=3000,
-            )
+            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
-                    click_sel = cap_sel.get("click_target", 'button, [class*="start"]')
-                    btn = await frame.wait_for_selector(click_sel, timeout=3000)
+                    btn = await frame.wait_for_selector(self.SEL_CLICK_TARGET, timeout=3000)
                     if btn:
                         await btn.click(timeout=3000)
-                        logger.debug(f"[{self.username}] Clicked CAPTCHA start button")
+                        logger.debug(f"[{self.username}] Đã click nút Start CAPTCHA")
         except Exception:
             pass
 
@@ -282,15 +315,14 @@ class RobloxCaptchaCollector:
                         # (3) Bam Login
                         await self._click_login(page)
 
-                        # (4) Doi CAPTCHA
-                        cap_sel = self.cfg.get("captcha_selectors", {})
+                        # (4) Đợi CAPTCHA
                         try:
                             await page.wait_for_selector(
-                                cap_sel.get("iframe", 'iframe[src*="arkose"]'),
+                                self.SEL_CAPTCHA_IFRAME,
                                 timeout=self.cfg["captcha_timeout_sec"] * 1000,
                             )
                         except Exception:
-                            logger.debug(f"[{self.username}] #{round_num+1} Khong thay CAPTCHA, bo qua...")
+                            logger.debug(f"[{self.username}] #{round_num+1} Không thấy CAPTCHA, bỏ qua...")
                             continue
 
                         await asyncio.sleep(1)
@@ -336,12 +368,9 @@ class RobloxCaptchaCollector:
 
     async def _capture_iframe(self, page, round_num: int, ts: str) -> List[Dict]:
         results = []
-        cap_sel = self.cfg.get("captcha_selectors", {})
 
         try:
-            iframe_el = await page.wait_for_selector(
-                cap_sel.get("iframe", 'iframe[src*="arkose"]'), timeout=5000,
-            )
+            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if not iframe_el:
                 return results
 
@@ -349,16 +378,14 @@ class RobloxCaptchaCollector:
             if not frame:
                 return results
 
-            game_type = await self._detect_game_type(frame)
+            game_type = await self._detect_game_type(frame, iframe_el)
             type_dir = CAPTURED_DIR / game_type
             type_dir.mkdir(parents=True, exist_ok=True)
 
-            # Chup game area
+            # Chụp game area
             game_path = type_dir / f"{self.username}_r{round_num}_{ts}.png"
             try:
-                area = await frame.wait_for_selector(
-                    cap_sel.get("game_area", 'canvas, [class*="game"]'), timeout=3000,
-                )
+                area = await frame.wait_for_selector(self.SEL_GAME_AREA, timeout=3000)
                 if area:
                     await area.screenshot(path=str(game_path))
                 else:
