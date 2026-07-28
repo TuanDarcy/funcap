@@ -1,34 +1,15 @@
 {
-  "//": "=== Cấu hình FunCAPTCHA Collector v2 ===",
-
   "threads": 5,
-  "//_threads": "Số browser chạy cùng lúc",
-
   "captchas_per_account": 20,
-  "//_captchas_per_account": "⭐ Mỗi account thu thập bao nhiêu CAPTCHA rồi next. Mỗi lần reload → CAPTCHA mới → chụp tiếp.",
-
   "reload_delay_sec": 2.0,
-  "//_reload_delay": "Delay giữa các lần reload (giây)",
-
   "headless": true,
-  "//_headless": "Ẩn browser (false = hiện lên để debug)",
-
   "viewport_width": 500,
   "viewport_height": 700,
-  "//_viewport": "Kích thước cửa sổ browser",
-
   "use_proxy": true,
-  "//_use_proxy": "⭐ Có dùng proxy không? false = chạy direct không cần proxy",
-
   "proxy_mode": "per_tab",
-  "//_proxy_mode": "⭐ 'per_tab': mỗi tab 1 proxy | 'per_account': mỗi account 1 proxy | 'round_robin': xoay vòng",
-
   "captcha_timeout_sec": 15,
-  "//_captcha_timeout": "⭐ Thời gian đợi CAPTCHA load (giây). Tăng lên nếu proxy chậm.",
-
   "click_to_reveal": true,
-  "//_click_to_reveal": "⭐ Có click vào CAPTCHA widget để game hiện ra không",
-
   "click_delay_sec": 2.0,
-  "//_click_delay": "Delay sau khi click CAPTCHA (giây)"
+  "debug": false,
+  "debug_dir": "captured/_debug"
 }

@@ -65,6 +65,8 @@ DEFAULT_CONFIG = {
     "captcha_timeout_sec": 15,
     "click_to_reveal": True,
     "click_delay_sec": 2.0,
+    "debug": False,
+    "debug_dir": "captured/_debug",
 }
 
 # --- Class folders ---
@@ -129,6 +131,39 @@ class RobloxCaptchaCollector:
         self.proxy = proxy
         self.cfg = config or DEFAULT_CONFIG
         self.total_captured = 0
+        self._debug_dir = None
+        if self.cfg.get("debug"):
+            self._debug_dir = CAPTURED_DIR / self.cfg.get("debug_dir", "_debug") / self.username
+            self._debug_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[{self.username}] DEBUG mode ON -> {self._debug_dir}")
+
+    async def _debug_screenshot(self, page, step: str, round_num: int = 0):
+        """Chup screenshot debug tai moi buoc."""
+        if not self._debug_dir:
+            return
+        try:
+            ts = datetime.now(timezone.utc).strftime("%H%M%S")
+            path = self._debug_dir / f"r{round_num}_{step}_{ts}.png"
+            await page.screenshot(path=str(path), full_page=True)
+            logger.debug(f"[{self.username}] DEBUG screenshot: {step} -> {path.name}")
+        except Exception:
+            pass
+
+    async def _debug_log_html(self, page, step: str):
+        """Log 1 doan HTML nho de debug DOM."""
+        if not self.cfg.get("debug"):
+            return
+        try:
+            # Log iframe src
+            iframe = await page.query_selector(self.SEL_CAPTCHA_IFRAME)
+            if iframe:
+                src = await iframe.get_attribute("src") or "(no src)"
+                logger.debug(f"[{self.username}] {step} | iframe src: {src[:120]}...")
+            # Log title
+            title = await page.title()
+            logger.debug(f"[{self.username}] {step} | page title: {title}")
+        except Exception:
+            pass
 
     # -- Proxy parser --
 
@@ -252,32 +287,68 @@ class RobloxCaptchaCollector:
             except Exception:
                 await page.keyboard.press("Enter")
 
-    # -- Click "Start Puzzle" de reveal game --
+    # -- Click "Start Puzzle" / "Verify" de reveal game --
 
-    async def _click_reveal_captcha(self, page):
-        """Bam nut Start Puzzle trong iframe FunCAPTCHA."""
+    async def _click_reveal_captcha(self, page, round_num: int = 0):
+        """
+        Tim va bam nut Verify/Start Puzzle trong iframe FunCAPTCHA.
+        Phai bam nut nay thi anh game moi hien ra de chup.
+
+        Cac nut co the gap:
+          - <button data-theme="home.verifyButton">Start Puzzle</button>
+          - <button>Verify</button>
+          - Nut play/start bat ky
+        """
+        logger.debug(f"[{self.username}] Dang tim nut Verify/Start Puzzle...")
+        await self._debug_screenshot(page, "01_before_click_verify", round_num)
+
+        # --- Cach 1: Tim iframe -> tim nut Start Puzzle ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if not iframe_el:
-                return
-            frame = await iframe_el.content_frame()
-            if not frame:
-                return
-            btn = await frame.wait_for_selector(self.SEL_START_PUZZLE, timeout=5000)
-            if btn:
-                await btn.click(timeout=3000)
-                logger.debug(f"[{self.username}] Da click Start Puzzle")
-                await asyncio.sleep(self.cfg.get("click_delay_sec", 2.0))
-                return
-        except Exception:
-            pass
+            if iframe_el:
+                frame = await iframe_el.content_frame()
+                if frame:
+                    # Thu nhieu selector cho nut verify
+                    verify_selectors = [
+                        self.SEL_START_PUZZLE,
+                        'button[data-theme="home.verifyButton"]',
+                        'button:has-text("Start Puzzle")',
+                        'button:has-text("Verify")',
+                        'button:has-text("Start")',
+                        'button:has-text("Play")',
+                        '[class*="verify"]',
+                        '[class*="start"]',
+                        '[class*="play"]',
+                    ]
+                    for sel in verify_selectors:
+                        try:
+                            btn = await frame.wait_for_selector(sel, timeout=2000)
+                            if btn:
+                                text = await btn.inner_text()
+                                logger.info(f"[{self.username}] Tim thay nut: '{text.strip()}' -> click")
+                                await btn.click(timeout=3000)
+                                await self._debug_screenshot(page, "02_after_click_verify", round_num)
+                                await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+                                return True
+                        except Exception:
+                            continue
+        except Exception as e:
+            logger.debug(f"[{self.username}] Cach 1 that bai: {e}")
+
+        # --- Cach 2: Click truc tiep vao iframe ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
+                logger.debug(f"[{self.username}] Click truc tiep vao iframe...")
                 await iframe_el.click(timeout=3000)
-                await asyncio.sleep(2)
-        except Exception:
-            pass
+                await self._debug_screenshot(page, "02b_after_click_iframe", round_num)
+                await asyncio.sleep(3)
+                return True
+        except Exception as e:
+            logger.debug(f"[{self.username}] Cach 2 that bai: {e}")
+
+        logger.warning(f"[{self.username}] KHONG tim thay nut Verify nao!")
+        return False
 
     # -- Main loop --
 
@@ -323,34 +394,52 @@ class RobloxCaptchaCollector:
                         await page.add_init_script(self.STEALTH_JS)
 
                         # (1) Vao Roblox login
+                        logger.debug(f"[{self.username}] #{round_num+1} Vao Roblox login...")
                         await page.goto(self.ROBLOX_LOGIN_URL, wait_until="networkidle", timeout=30000)
                         await asyncio.sleep(2)
+                        await self._debug_screenshot(page, "A_page_loaded", round_num)
 
                         # (2) Dien form
                         await self._fill_login_form(page)
                         await asyncio.sleep(0.3)
 
                         # (3) Bam Login
+                        logger.debug(f"[{self.username}] #{round_num+1} Bam Login...")
                         await self._click_login(page)
 
-                        # (4) Đợi CAPTCHA
+                        # (4) Doi CAPTCHA iframe xuat hien
+                        logger.debug(f"[{self.username}] #{round_num+1} Doi CAPTCHA iframe...")
+                        captcha_appeared = False
                         try:
                             await page.wait_for_selector(
                                 self.SEL_CAPTCHA_IFRAME,
                                 timeout=self.cfg["captcha_timeout_sec"] * 1000,
                             )
+                            captcha_appeared = True
+                            logger.debug(f"[{self.username}] #{round_num+1} CAPTCHA iframe DA XUAT HIEN")
+                            await self._debug_screenshot(page, "B_captcha_iframe_visible", round_num)
+                            await self._debug_log_html(page, "B_captcha_iframe")
                         except Exception:
-                            logger.debug(f"[{self.username}] #{round_num+1} Không thấy CAPTCHA, bỏ qua...")
+                            logger.debug(f"[{self.username}] #{round_num+1} Khong thay CAPTCHA iframe, bo qua...")
+                            await self._debug_screenshot(page, "B_no_captcha", round_num)
                             continue
 
                         await asyncio.sleep(1)
 
-                        # (5) Click de reveal game
-                        if self.cfg.get("click_to_reveal", True):
-                            await self._click_reveal_captcha(page)
-                            await asyncio.sleep(self.cfg.get("click_delay_sec", 2.0))
+                        # (5) Click Verify/Start Puzzle de reveal game
+                        if self.cfg.get("click_to_reveal", True) and captcha_appeared:
+                            logger.debug(f"[{self.username}] #{round_num+1} Tim nut Verify...")
+                            clicked = await self._click_reveal_captcha(page, round_num)
+                            if clicked:
+                                logger.debug(f"[{self.username}] #{round_num+1} Da click Verify")
+                                await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+                            else:
+                                logger.debug(f"[{self.username}] #{round_num+1} Khong click duoc Verify, van thu chup...")
+                            await self._debug_screenshot(page, "C_after_verify", round_num)
 
                         # (6) Chup & detect
+                        logger.debug(f"[{self.username}] #{round_num+1} Bat dau chup...")
+                        await self._debug_screenshot(page, "D_before_capture", round_num)
                         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                         captcha_results = await self._capture_iframe(page, round_num, ts)
 
@@ -363,6 +452,9 @@ class RobloxCaptchaCollector:
                                 f"Captured {len(captcha_results)} ({', '.join(types)}) "
                                 f"| proxy={'yes' if proxy_cfg else 'no'}"
                             )
+                        else:
+                            logger.warning(f"[{self.username}] #{round_num+1}/{target} KHONG chup duoc anh nao!")
+                            await self._debug_screenshot(page, "E_no_images_captured", round_num)
 
                     except Exception as e:
                         logger.error(f"[{self.username}] #{round_num+1} error: {e}")
