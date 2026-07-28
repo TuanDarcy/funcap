@@ -55,10 +55,9 @@ except ImportError:
 _shutdown = threading.Event()
 
 def _signal_handler(signum, frame):
-    print("\n[!] Ctrl+C - shutting down...")
+    print("\n[!] Ctrl+C - exiting NOW...")
     _shutdown.set()
-    # Force exit after 3s if still hanging
-    threading.Timer(3.0, lambda: os._exit(0)).start()
+    os._exit(0)  # Kill immediately, no graceful wait
 
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
@@ -406,7 +405,6 @@ class RobloxCaptchaCollector:
 
                 for round_num in range(target):
                     if _shutdown.is_set():
-                        logger.warning(f"[{self.username}] Shutdown signal - stopping at round {round_num+1}/{target}")
                         break
 
                     context = None
@@ -485,6 +483,16 @@ class RobloxCaptchaCollector:
                             await self._debug_screenshot(page, "E_no_images_captured", round_num)
 
                     except Exception as e:
+                        err_msg = str(e)
+                        if "Connection closed" in err_msg or "Target closed" in err_msg:
+                            logger.warning(f"[{self.username}] Browser crashed (connection closed), relaunching...")
+                            try:
+                                await browser.close()
+                            except Exception:
+                                pass
+                            browser = await p.chromium.launch(**launch_opts)
+                            logger.debug(f"[{self.username}] Browser RELAUNCHED, continuing...")
+                            continue
                         logger.error(f"[{self.username}] #{round_num+1} error: {e}")
                     finally:
                         if context:
