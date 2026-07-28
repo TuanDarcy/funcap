@@ -40,17 +40,25 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from loguru import logger
+    _use_loguru = True
 except ImportError:
     import logging
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
+    _use_loguru = False
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s | %(levelname)-7s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
     logger = logging.getLogger("collector")
 
 # Global shutdown flag for Ctrl+C
 _shutdown = threading.Event()
 
 def _signal_handler(signum, frame):
-    print("\n[!] Ctrl+C - shutting down gracefully...")
+    print("\n[!] Ctrl+C - shutting down...")
     _shutdown.set()
+    # Force exit after 3s if still hanging
+    threading.Timer(3.0, lambda: os._exit(0)).start()
 
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
@@ -581,7 +589,15 @@ class RobloxCaptchaCollector:
 # ======================================================================
 
 def _run_async(collector) -> list:
-    return asyncio.run(collector.run())
+    try:
+        return asyncio.run(collector.run())
+    except KeyboardInterrupt:
+        _shutdown.set()
+        return []
+    except Exception as e:
+        if _shutdown.is_set():
+            return []
+        raise
 
 
 def load_config() -> dict:
@@ -644,6 +660,11 @@ def collect_all():
     accounts = load_accounts()
     proxies = load_proxies()
 
+    # Set logging level based on debug flag
+    if config.get("debug") and not _use_loguru:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("DEBUG mode ON - verbose logging enabled")
+
     use_proxy = config.get("use_proxy", True)
     proxy_mode = config.get("proxy_mode", "per_tab")
 
@@ -684,28 +705,34 @@ def collect_all():
 
     with ThreadPoolExecutor(max_workers=n_threads) as executor:
         futures = {}
-        for (username, password), proxy in proxy_map.items():
-            if _shutdown.is_set():
-                break
-            futures[executor.submit(process, username, password, proxy)] = username
+        try:
+            for (username, password), proxy in proxy_map.items():
+                if _shutdown.is_set():
+                    break
+                futures[executor.submit(process, username, password, proxy)] = username
 
-        for future in as_completed(futures):
-            if _shutdown.is_set():
-                logger.warning("Shutting down - cancelling remaining tasks...")
-                for f in futures:
-                    f.cancel()
-                break
-            username = futures[future]
-            try:
-                results = future.result()
-                with lock:
-                    all_results.extend(results)
-                    done_count += 1
-                logger.info(f"Progress: {done_count}/{len(accounts)} accounts | {username}: {len(results)} captures")
-            except Exception as e:
-                with lock:
-                    done_count += 1
-                logger.error(f"[{username}] Crash: {e}")
+            for future in as_completed(futures):
+                if _shutdown.is_set():
+                    logger.warning("Shutting down - cancelling remaining tasks...")
+                    for f in futures:
+                        f.cancel()
+                    break
+                username = futures[future]
+                try:
+                    results = future.result()
+                    with lock:
+                        all_results.extend(results)
+                        done_count += 1
+                    logger.info(f"Progress: {done_count}/{len(accounts)} accounts | {username}: {len(results)} captures")
+                except Exception as e:
+                    with lock:
+                        done_count += 1
+                    logger.error(f"[{username}] Crash: {e}")
+        except KeyboardInterrupt:
+            logger.warning("Interrupted! Stopping...")
+            _shutdown.set()
+            for f in futures:
+                f.cancel()
 
     # Save metadata
     meta_path = CAPTURED_DIR / "metadata.json"
