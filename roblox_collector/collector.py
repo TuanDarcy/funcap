@@ -123,6 +123,11 @@ class RobloxCaptchaCollector:
         'button[aria-label*="Start Puzzle"]'
     )
 
+    # --- Asset ảnh base64 của nút Start Puzzle ---
+    START_PUZZLE_B64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAKcAAAA3CAYAAABpcFqvAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAAAJUSURBVHhe7dpLUisxDIVhw64ygm3BArKujGBZYUJTRiXZUaetHKj/q2Jwbbf86BPzqPt0vV6vDRD0bBsAFYQTsp5ePt74tg5J3JyQRTghi3BCFuGELMIJWYQTsggnZBFOyCKckEU4IYtwQhbhhCzCCVmEE7IIJ2QRTsginJD1kP8JfzmdbVN7/Xy3Tb9cTufpmKNk5/L2Y2XqVerXrrbG0pvzcjqHL3LWV2XVXKvq/mel4dyj8qWunmt1/f+mLJz2xbx+vv989ey4v6bfl7c/3K7sZ87ZzzZefxRU+7w3zo5pzhzec5ZXx7J1rag/ao/6ZuuNanu8mnYNLajjjVuh7ObsRRvevjK8Wm3Qvpn1Iz6jqP1oZTdnG2xqFMjRJ3vri9ptn53/1udmbN2RaD12vlFf79ZxLRjrte1pX6H05ow2c/n+TT3zklt32+6x97l7HD1nJiiZsSpKw9nuDNTI3oBXOXrPmbBlxnoedbbl4dxsIbWHlT2ARxzaSL+vaI/3yuw3M1ZNWThHn769L8/WWhEEdZn9Zsb27Aet6pzLwtmzobL/3qPisBRkvkVnxioqC6c9nNFNeo+j61Xp1x3tIRO2zNgZu7YV780j8aeknj1I75ltjNdn9fVmL8yr542zZnVHvDmtW/cb7dXj1bRrH9WwY1couznb94aiTUV9XtvG67N1RgdsefVW8+b02h4hWkfUfrTSmxPIKL05gQzCCVmEE7IIJ2QRTsginJBFOCGLcEIW4YQswglZhBOyCCdkEU7IIpyQRTghi3BCFuGELMIJWV9tp0nmG2CzVgAAAABJRU5ErkJggg=="
+    )
+
     # --- Ảnh lựa chọn: "Image 1 of 5", "Image 2 of 5", ... ---
     SEL_CHOICE_IMAGES = 'img[aria-label*="Image "][aria-label*=" of "]'
 
@@ -285,11 +290,84 @@ class RobloxCaptchaCollector:
 
     # -- Click "Start Puzzle" / "Verify" để hiện game --
 
+    async def _click_by_image(self, frame, round_num: int = 0) -> bool:
+        """
+        Click nút Start Puzzle bằng cách match ảnh base64.
+        Chụp màn hình iframe -> dùng OpenCV template matching -> click toạ độ.
+        """
+        try:
+            import base64
+            import numpy as np
+            import cv2
+            from PIL import Image
+            import io
+        except ImportError:
+            self._step("⚠️ Thiếu opencv-python, bỏ qua image click")
+            return False
+
+        try:
+            # Lưu asset ảnh mẫu
+            asset_dir = INPUT_DIR / "assets"
+            asset_dir.mkdir(exist_ok=True)
+            template_path = asset_dir / "start_puzzle.png"
+            if not template_path.exists():
+                img_bytes = base64.b64decode(self.START_PUZZLE_B64)
+                with open(template_path, "wb") as f:
+                    f.write(img_bytes)
+
+            # Chụp iframe
+            screenshot_bytes = await frame.screenshot()
+            screenshot = np.array(Image.open(io.BytesIO(screenshot_bytes)).convert("RGB"))
+            screenshot_bgr = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+
+            # Load template
+            template = cv2.imread(str(template_path))
+            if template is None:
+                return False
+
+            # Template matching
+            result = cv2.matchTemplate(screenshot_bgr, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            if max_val < 0.7:
+                self._step(f"🔍 Image match confidence: {max_val:.2f} < 0.7 — bỏ qua")
+                return False
+
+            # Click giữa template
+            h, w = template.shape[:2]
+            center_x = max_loc[0] + w // 2
+            center_y = max_loc[1] + h // 2
+            self._step(f"🖼️ Click bằng ảnh tại ({center_x}, {center_y}) — confidence: {max_val:.2f}")
+            await frame.click(position={"x": center_x, "y": center_y}, timeout=3000)
+            await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
+            return True
+
+        except Exception as e:
+            self._step(f"⚠️ Image click lỗi: {e}")
+            return False
+
+    # -- Click "Start Puzzle" / "Verify" --
+
     async def _click_reveal_captcha(self, page, round_num: int = 0):
         """Tìm và bấm nút Verify/Start Puzzle trong iframe FunCAPTCHA."""
 
-        # --- Cách 1: Tìm iframe -> tìm nút Start Puzzle ---
+        # --- Cách 0: Click bằng ảnh base64 (OpenCV) ---
         try:
+            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
+            if iframe_el:
+                frame = await iframe_el.content_frame()
+                if frame:
+                    if await self._click_by_image(frame, round_num):
+                        return True
+        except Exception:
+            pass
+
+        # --- Cách 1: Text/Role/XPath/CSS ---
+        try:
+            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
+            if iframe_el:
+                frame = await iframe_el.content_frame()
+                if frame:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
