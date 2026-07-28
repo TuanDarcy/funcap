@@ -1,29 +1,28 @@
 """
-Roblox FunCAPTCHA Collector — Standalone v2
+Roblox FunCAPTCHA Collector — Standalone v3
 =============================================
-Logic dung: SPAM CAPTCHA -> chup -> reload -> chup tiep -> ... -> het luot thi qua account khac.
-KHONG can giai CAPTCHA, KHONG can login thanh cong.
-Muc tieu duy nhat: thu thap CANG NHIEU anh CAPTCHA cang tot.
+Logic: SPAM CAPTCHA -> chụp -> reload -> chụp tiếp -> ... vô hạn.
+KHÔNG cần giải CAPTCHA, KHÔNG cần login thành công.
+Mục tiêu duy nhất: thu thập CÀNG NHIỀU ảnh CAPTCHA càng tốt.
 
-Flow moi account:
-  1. Mo browser -> vao Roblox login
-  2. Dien user:pass -> bam Login -> FunCAPTCHA xuat hien
-  3. Click vao CAPTCHA de reveal game (neu can)
-  4. Chup anh game -> detect loai -> luu vao folder
-  5. Reload trang -> lap lai N lan (captchas_per_account)
-  6. Dong browser -> qua account tiep theo
+Flow mỗi account:
+  1. Mở browser -> vào Roblox login
+  2. Điền user:pass -> bấm Login -> FunCAPTCHA xuất hiện
+  3. Click nút Verify/Start Puzzle để hiện game
+  4. Chụp ảnh game -> detect loại -> lưu vào folder
+  5. Reload trang -> lặp lại vô hạn
+  6. Đóng browser -> qua account tiếp theo
 
-Cau truc:
+Cấu trúc:
   roblox_collector/
     input/
-      accounts.txt     <- username:password (moi dong 1 account)
-      proxies.txt      <- ip:port hoac user:pass@ip:port
-      config.json      <- cau hinh (xem DEFAULT_CONFIG ben duoi)
+      accounts.txt     <- username:password (mỗi dòng 1 account)
+      proxies.txt      <- ip:port hoặc user:pass@ip:port
+      config.json      <- cấu hình
     captured/
-      rotate_animal/   <- anh CAPTCHA tu dong phan loai theo folder
-      shadow_match/
+      rotate_animal/   <- ảnh CAPTCHA tự động phân loại theo folder
       ...
-    collector.py       <- script nay
+    collector.py       <- script này
 """
 
 import asyncio
@@ -57,7 +56,7 @@ _shutdown = threading.Event()
 def _signal_handler(signum, frame):
     print("\n[!] Ctrl+C - exiting NOW...")
     _shutdown.set()
-    os._exit(0)  # Kill immediately, no graceful wait
+    os._exit(0)  # Kill immediately
 
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
@@ -73,7 +72,7 @@ PROXIES_PATH = INPUT_DIR / "proxies.txt"
 # --- Default config (behavior only, no selectors) ---
 DEFAULT_CONFIG = {
     "threads": 5,
-    "captchas_per_account": 20,
+    "captchas_per_account": 999999,
     "reload_delay_sec": 2.0,
     "headless": False,
     "viewport_width": 500,
@@ -83,7 +82,7 @@ DEFAULT_CONFIG = {
     "captcha_timeout_sec": 15,
     "click_to_reveal": True,
     "click_delay_sec": 2.0,
-    "debug": True,
+    "debug": False,
     "debug_dir": "captured/_debug",
 }
 
@@ -153,39 +152,6 @@ class RobloxCaptchaCollector:
         self.proxy = proxy
         self.cfg = config or DEFAULT_CONFIG
         self.total_captured = 0
-        self._debug_dir = None
-        if self.cfg.get("debug"):
-            self._debug_dir = CAPTURED_DIR / self.cfg.get("debug_dir", "_debug") / self.username
-            self._debug_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"[{self.username}] DEBUG mode ON -> {self._debug_dir}")
-
-    async def _debug_screenshot(self, page, step: str, round_num: int = 0):
-        """Chup screenshot debug tai moi buoc."""
-        if not self._debug_dir:
-            return
-        try:
-            ts = datetime.now(timezone.utc).strftime("%H%M%S")
-            path = self._debug_dir / f"r{round_num}_{step}_{ts}.png"
-            await page.screenshot(path=str(path), full_page=True)
-            logger.debug(f"[{self.username}] DEBUG screenshot: {step} -> {path.name}")
-        except Exception:
-            pass
-
-    async def _debug_log_html(self, page, step: str):
-        """Log 1 doan HTML nho de debug DOM."""
-        if not self.cfg.get("debug"):
-            return
-        try:
-            # Log iframe src
-            iframe = await page.query_selector(self.SEL_CAPTCHA_IFRAME)
-            if iframe:
-                src = await iframe.get_attribute("src") or "(no src)"
-                logger.debug(f"[{self.username}] {step} | iframe src: {src[:120]}...")
-            # Log title
-            title = await page.title()
-            logger.debug(f"[{self.username}] {step} | page title: {title}")
-        except Exception:
-            pass
 
     # -- Proxy parser --
 
@@ -309,67 +275,51 @@ class RobloxCaptchaCollector:
             except Exception:
                 await page.keyboard.press("Enter")
 
-    # -- Click "Start Puzzle" / "Verify" de reveal game --
+    # -- Click "Start Puzzle" / "Verify" để hiện game --
 
     async def _click_reveal_captcha(self, page, round_num: int = 0):
-        """
-        Tim va bam nut Verify/Start Puzzle trong iframe FunCAPTCHA.
-        Phai bam nut nay thi anh game moi hien ra de chup.
+        """Tìm và bấm nút Verify/Start Puzzle trong iframe FunCAPTCHA."""
 
-        Cac nut co the gap:
-          - <button data-theme="home.verifyButton">Start Puzzle</button>
-          - <button>Verify</button>
-          - Nut play/start bat ky
-        """
-        logger.debug(f"[{self.username}] Dang tim nut Verify/Start Puzzle...")
-        await self._debug_screenshot(page, "01_before_click_verify", round_num)
-
-        # --- Cach 1: Tim iframe -> tim nut Start Puzzle ---
+        # --- Cách 1: Tìm iframe -> tìm nút Start Puzzle ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
-                    # Thu nhieu selector cho nut verify
                     verify_selectors = [
                         self.SEL_START_PUZZLE,
                         'button[data-theme="home.verifyButton"]',
                         'button:has-text("Start Puzzle")',
                         'button:has-text("Verify")',
                         'button:has-text("Start")',
-                        'button:has-text("Play")',
                         '[class*="verify"]',
                         '[class*="start"]',
-                        '[class*="play"]',
                     ]
                     for sel in verify_selectors:
                         try:
                             btn = await frame.wait_for_selector(sel, timeout=2000)
                             if btn:
-                                text = await btn.inner_text()
-                                logger.info(f"[{self.username}] Tim thay nut: '{text.strip()}' -> click")
+                                text = (await btn.inner_text()).strip()
+                                logger.info(f"[{self.username}] Đã click nút: '{text}'")
                                 await btn.click(timeout=3000)
-                                await self._debug_screenshot(page, "02_after_click_verify", round_num)
                                 await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
                                 return True
                         except Exception:
                             continue
-        except Exception as e:
-            logger.debug(f"[{self.username}] Cach 1 that bai: {e}")
+        except Exception:
+            pass
 
-        # --- Cach 2: Click truc tiep vao iframe ---
+        # --- Cách 2: Click trực tiếp vào iframe ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
-                logger.debug(f"[{self.username}] Click truc tiep vao iframe...")
                 await iframe_el.click(timeout=3000)
-                await self._debug_screenshot(page, "02b_after_click_iframe", round_num)
                 await asyncio.sleep(3)
                 return True
-        except Exception as e:
-            logger.debug(f"[{self.username}] Cach 2 that bai: {e}")
+        except Exception:
+            pass
 
-        logger.warning(f"[{self.username}] KHONG tim thay nut Verify nao!")
+        logger.warning(f"[{self.username}] KHÔNG tìm thấy nút Verify!")
         return False
 
     # -- Main loop --
@@ -383,7 +333,6 @@ class RobloxCaptchaCollector:
 
         captured_all = []
         target = self.cfg["captchas_per_account"]
-        logger.info(f"[{self.username}] START: target={target}, proxy={self.proxy or 'direct'}, headless={self.cfg['headless']}, debug={self.cfg.get('debug')}")
 
         try:
             async with async_playwright() as p:
@@ -402,10 +351,9 @@ class RobloxCaptchaCollector:
                     proxy_cfg = self.parse_proxy(self.proxy)
                 if proxy_cfg:
                     launch_opts["proxy"] = proxy_cfg
-                    logger.info(f"[{self.username}] Proxy: {self.proxy}")
 
                 browser = await p.chromium.launch(**launch_opts)
-                logger.debug(f"[{self.username}] Browser launched")
+                logger.info(f"[{self.username}] Bắt đầu thu thập | proxy={'có' if proxy_cfg else 'không'}")
 
                 for round_num in range(target):
                     if _shutdown.is_set():
@@ -413,7 +361,6 @@ class RobloxCaptchaCollector:
 
                     context = None
                     try:
-                        logger.debug(f"[{self.username}] #{round_num+1}/{target} --- NEW ROUND ---")
                         context = await browser.new_context(
                             viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -421,24 +368,19 @@ class RobloxCaptchaCollector:
                         )
                         page = await context.new_page()
                         await page.add_init_script(self.STEALTH_JS)
-                        logger.debug(f"[{self.username}] #{round_num+1} New page created")
 
-                        # (1) Vao Roblox login
-                        logger.debug(f"[{self.username}] #{round_num+1} Vao Roblox login...")
+                        # (1) Vào Roblox login
                         await page.goto(self.ROBLOX_LOGIN_URL, wait_until="networkidle", timeout=30000)
                         await asyncio.sleep(2)
-                        await self._debug_screenshot(page, "A_page_loaded", round_num)
 
-                        # (2) Dien form
+                        # (2) Điền form
                         await self._fill_login_form(page)
                         await asyncio.sleep(0.3)
 
-                        # (3) Bam Login
-                        logger.debug(f"[{self.username}] #{round_num+1} Bam Login...")
+                        # (3) Bấm Login
                         await self._click_login(page)
 
-                        # (4) Doi CAPTCHA iframe xuat hien
-                        logger.debug(f"[{self.username}] #{round_num+1} Doi CAPTCHA iframe...")
+                        # (4) Đợi CAPTCHA iframe xuất hiện
                         captcha_appeared = False
                         try:
                             await page.wait_for_selector(
@@ -446,30 +388,17 @@ class RobloxCaptchaCollector:
                                 timeout=self.cfg["captcha_timeout_sec"] * 1000,
                             )
                             captcha_appeared = True
-                            logger.debug(f"[{self.username}] #{round_num+1} CAPTCHA iframe DA XUAT HIEN")
-                            await self._debug_screenshot(page, "B_captcha_iframe_visible", round_num)
-                            await self._debug_log_html(page, "B_captcha_iframe")
                         except Exception:
-                            logger.debug(f"[{self.username}] #{round_num+1} Khong thay CAPTCHA iframe, bo qua...")
-                            await self._debug_screenshot(page, "B_no_captcha", round_num)
                             continue
 
                         await asyncio.sleep(1)
 
-                        # (5) Click Verify/Start Puzzle de reveal game
+                        # (5) Click Verify/Start Puzzle
                         if self.cfg.get("click_to_reveal", True) and captcha_appeared:
-                            logger.debug(f"[{self.username}] #{round_num+1} Tim nut Verify...")
-                            clicked = await self._click_reveal_captcha(page, round_num)
-                            if clicked:
-                                logger.debug(f"[{self.username}] #{round_num+1} Da click Verify")
-                                await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
-                            else:
-                                logger.debug(f"[{self.username}] #{round_num+1} Khong click duoc Verify, van thu chup...")
-                            await self._debug_screenshot(page, "C_after_verify", round_num)
+                            await self._click_reveal_captcha(page, round_num)
+                            await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
 
-                        # (6) Chup & detect
-                        logger.debug(f"[{self.username}] #{round_num+1} Bat dau chup...")
-                        await self._debug_screenshot(page, "D_before_capture", round_num)
+                        # (6) Chụp & detect
                         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                         captcha_results = await self._capture_iframe(page, round_num, ts)
 
@@ -478,26 +407,21 @@ class RobloxCaptchaCollector:
                             self.total_captured += len(captcha_results)
                             types = set(r["type"] for r in captcha_results)
                             logger.info(
-                                f"[{self.username}] #{round_num+1}/{target} "
-                                f"Captured {len(captcha_results)} ({', '.join(types)}) "
-                                f"| proxy={'yes' if proxy_cfg else 'no'}"
+                                f"[{self.username}] #{self.total_captured} | "
+                                f"+{len(captcha_results)} ảnh ({', '.join(types)})"
                             )
-                        else:
-                            logger.warning(f"[{self.username}] #{round_num+1}/{target} KHONG chup duoc anh nao!")
-                            await self._debug_screenshot(page, "E_no_images_captured", round_num)
 
                     except Exception as e:
                         err_msg = str(e)
                         if "Connection closed" in err_msg or "Target closed" in err_msg:
-                            logger.warning(f"[{self.username}] Browser crashed (connection closed), relaunching...")
+                            logger.warning(f"[{self.username}] Browser crash, khởi động lại...")
                             try:
                                 await browser.close()
                             except Exception:
                                 pass
                             browser = await p.chromium.launch(**launch_opts)
-                            logger.debug(f"[{self.username}] Browser RELAUNCHED, continuing...")
                             continue
-                        logger.error(f"[{self.username}] #{round_num+1} error: {e}")
+                        logger.error(f"[{self.username}] Lỗi: {e}")
                     finally:
                         if context:
                             try:
@@ -511,37 +435,33 @@ class RobloxCaptchaCollector:
         except Exception as e:
             logger.error(f"[{self.username}] Browser crash: {e}")
 
-        logger.success(f"[{self.username}] Done: {self.total_captured}/{target} captures")
+        logger.success(f"[{self.username}] Xong: {self.total_captured} ảnh")
         return captured_all
 
-    # -- Capture CAPTCHA iframe (chup tung anh rieng le) --
+    # -- Chụp CAPTCHA iframe (từng ảnh riêng lẻ) --
 
     async def _capture_iframe(self, page, round_num: int, ts: str) -> List[Dict]:
-        """Chup key-frame + tung anh lua chon (Image 1 of 5, ...)."""
+        """Chụp key-frame + từng ảnh lựa chọn (Image 1 of 5, ...)."""
         if _shutdown.is_set():
             return []
 
         results = []
-        logger.debug(f"[{self.username}] _capture_iframe: bat dau...")
 
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if not iframe_el:
-                logger.debug(f"[{self.username}] _capture_iframe: KHONG tim thay iframe")
                 return results
 
             frame = await iframe_el.content_frame()
             if not frame:
-                logger.debug(f"[{self.username}] _capture_iframe: iframe khong co content_frame")
                 return results
 
             game_type = await self._detect_game_type(frame, iframe_el)
-            logger.debug(f"[{self.username}] _capture_iframe: detected game_type={game_type}")
 
             type_dir = CAPTURED_DIR / game_type
             type_dir.mkdir(parents=True, exist_ok=True)
 
-            # --- 1. Chup "Match This!" key frame ---
+            # --- 1. Chụp "Match This!" key frame ---
             try:
                 key_img = await frame.wait_for_selector(self.SEL_KEY_FRAME, timeout=3000)
                 if key_img:
@@ -549,16 +469,12 @@ class RobloxCaptchaCollector:
                     await key_img.screenshot(path=str(key_path))
                     results.append({"image_path": str(key_path), "type": f"{game_type}_keyframe",
                                     "username": self.username, "round": round_num + 1, "ts": ts})
-                    logger.debug(f"[{self.username}] Chup key-frame OK: {key_path.name}")
-                else:
-                    logger.debug(f"[{self.username}] Khong tim thay key-frame (Match This!)")
-            except Exception as e:
-                logger.debug(f"[{self.username}] Loi chup key-frame: {e}")
+            except Exception:
+                pass
 
-            # --- 2. Chup TUNG anh lua chon: Image 1 of 5, Image 2 of 5, ... ---
+            # --- 2. Chụp TỪNG ảnh lựa chọn: Image 1 of 5, Image 2 of 5, ... ---
             try:
                 choice_imgs = await frame.locator(self.SEL_CHOICE_IMAGES).all()
-                logger.debug(f"[{self.username}] Tim thay {len(choice_imgs)} anh lua chon")
                 for img_el in choice_imgs:
                     aria_label = await img_el.get_attribute("aria-label") or f"choice_{round_num}"
                     safe_name = aria_label.replace(" ", "_").replace(".", "").replace(":", "")[:30]
@@ -568,15 +484,13 @@ class RobloxCaptchaCollector:
                         results.append({"image_path": str(choice_path), "type": f"{game_type}_choice",
                                         "aria_label": aria_label, "username": self.username,
                                         "round": round_num + 1, "ts": ts})
-                        logger.debug(f"[{self.username}] Chup choice OK: {safe_name}")
-                    except Exception as e:
-                        logger.debug(f"[{self.username}] Loi chup choice {aria_label}: {e}")
-            except Exception as e:
-                logger.debug(f"[{self.username}] Loi locator choice images: {e}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
-            # --- 3. Fallback: chup toan bo game ---
+            # --- 3. Fallback: chụp toàn bộ game ---
             if not results:
-                logger.debug(f"[{self.username}] Fallback: chup toan bo game area")
                 game_path = type_dir / f"{self.username}_r{round_num}_full_{ts}.png"
                 try:
                     area = await frame.wait_for_selector(self.SEL_GAME_AREA, timeout=3000)
@@ -589,10 +503,9 @@ class RobloxCaptchaCollector:
                 results.append({"image_path": str(game_path), "type": game_type,
                                 "username": self.username, "round": round_num + 1, "ts": ts})
 
-        except Exception as e:
-            logger.debug(f"[{self.username}] _capture_iframe EXCEPTION: {e}")
+        except Exception:
+            pass
 
-        logger.debug(f"[{self.username}] _capture_iframe: done, {len(results)} results")
         return results
 
 
@@ -701,9 +614,9 @@ def collect_all():
     n_captchas = config["captchas_per_account"]
 
     logger.info("=" * 55)
-    logger.info(f"FunCAPTCHA Collector v2")
-    logger.info(f"  Accounts: {len(accounts)} | Captchas/acc: {n_captchas}")
-    logger.info(f"  Threads: {n_threads} | Proxy: {'yes' if use_proxy else 'no'} ({proxy_mode})")
+    logger.info("FunCAPTCHA Collector")
+    logger.info(f"  Accounts: {len(accounts)} | Số ảnh/acc: không giới hạn")
+    logger.info(f"  Threads: {n_threads} | Proxy: {'có' if use_proxy else 'không'} ({proxy_mode})")
     logger.info(f"  Output: {CAPTURED_DIR}")
     logger.info("=" * 55)
 
@@ -756,14 +669,14 @@ def collect_all():
     type_counts = Counter(r.get("type", "?") for r in all_results)
 
     print("\n" + "=" * 55)
-    print("  HOAN THANH THU THAP")
+    print("  HOÀN THÀNH THU THẬP")
     print("=" * 55)
-    print(f"  Tong anh: {len(all_results)}")
+    print(f"  Tổng ảnh: {len(all_results)}")
     for t, n in sorted(type_counts.items()):
         bar = "#" * min(n // max(1, len(all_results) // 30), 30)
         print(f"  {t:25s} {n:5d} {bar}")
-    print(f"\n  Du lieu: {CAPTURED_DIR}")
-    print(f"\n  Buoc tiep theo:")
+    print(f"\n  Dữ liệu: {CAPTURED_DIR}")
+    print(f"\n  Bước tiếp theo:")
     print(f"    python ../src/funcap_solver/data/labeler.py -i captured -o ../data/labeled")
     print("=" * 55)
 
