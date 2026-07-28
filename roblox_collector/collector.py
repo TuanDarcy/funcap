@@ -295,22 +295,31 @@ class RobloxCaptchaCollector:
                 frame = await iframe_el.content_frame()
                 if frame:
                     verify_selectors = [
-                        'xpath=/html/body/div/div/div[1]/button',
-                        '#root > div > div.sc-99cwso-0.sc-11w6f91-0.fcBZbp.eWRcSj.home.box.screen > button',
-                        'button[data-theme="home.verifyButton"]',
-                        'button:has-text("Start Puzzle")',
-                        'button:has-text("Verify")',
-                        'button:has-text("Start")',
-                        '[class*="verify"]',
-                        '[class*="start"]',
+                        # Cách 1: Click theo TEXT HIỂN THỊ (mạnh nhất, không phụ thuộc class)
+                        ('text', 'Start Puzzle'),
+                        ('role', 'button'),
+                        # Cách 2: XPath
+                        ('xpath', '/html/body/div/div/div[1]/button'),
+                        # Cách 3: CSS
+                        ('css', 'button[data-theme="home.verifyButton"]'),
+                        ('css', '#root > div > div.sc-99cwso-0.sc-11w6f91-0.fcBZbp.eWRcSj.home.box.screen > button'),
+                        ('css', 'button:has-text("Start Puzzle")'),
+                        ('css', 'button:has-text("Verify")'),
+                        ('css', 'button:has-text("Start")'),
                     ]
-                    for sel in verify_selectors:
+                    for method, sel in verify_selectors:
                         try:
-                            if sel.startswith("xpath="):
-                                btn = await frame.locator(sel).first
-                                await btn.wait_for(state="visible", timeout=2000)
+                            if method == 'text':
+                                btn = frame.get_by_text(sel, exact=False).first
+                                await btn.wait_for(state="visible", timeout=1500)
+                            elif method == 'role':
+                                btn = frame.get_by_role("button", name="Start Puzzle")
+                                await btn.wait_for(state="visible", timeout=1500)
+                            elif method == 'xpath':
+                                btn = frame.locator(sel).first
+                                await btn.wait_for(state="visible", timeout=1500)
                             else:
-                                btn = await frame.wait_for_selector(sel, timeout=2000)
+                                btn = await frame.wait_for_selector(sel, timeout=1500)
                             if btn:
                                 text = (await btn.inner_text()).strip()
                                 logger.info(f"[{self.username}] Đã click nút: '{text}'")
