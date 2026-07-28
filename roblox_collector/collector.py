@@ -125,7 +125,7 @@ class RobloxCaptchaCollector:
 
     # --- Asset ảnh base64 của nút Start Puzzle ---
     START_PUZZLE_B64 = (
-        "iVBORw0KGgoAAAANSUhEUgAAAKcAAAA3CAYAAABpcFqvAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAAAJUSURBVHhe7dpLUisxDIVhw64ygm3BArKujGBZYUJTRiXZUaetHKj/q2Jwbbf86BPzqPt0vV6vDRD0bBsAFYQTsp5ePt74tg5J3JyQRTghi3BCFuGELMIJWYQTsggnZBFOyCKckEU4IYtwQhbhhCzCCVmEE7IIJ2QRTsginJD1kP8JfzmdbVN7/Xy3Tb9cTufpmKNk5/L2Y2XqVerXrrbG0pvzcjqHL3LWV2XVXKvq/mel4dyj8qWunmt1/f+mLJz2xbx+vv989ey4v6bfl7c/3K7sZ87ZzzZefxRU+7w3zo5pzhzec5ZXx7J1rag/ao/6ZuuNanu8mnYNLajjjVuh7ObsRRvevjK8Wm3Qvpn1Iz6jqP1oZTdnG2xqFMjRJ3vri9ptn53/1udmbN2RaD12vlFf79ZxLRjrte1pX6H05ow2c/n+TT3zklt32+6x97l7HD1nJiiZsSpKw9nuDNTI3oBXOXrPmbBlxnoedbbl4dxsIbWHlT2ARxzaSL+vaI/3yuw3M1ZNWThHn769L8/WWhEEdZn9Zsb27Aet6pzLwtmzobL/3qPisBRkvkVnxioqC6c9nNFNeo+j61Xp1x3tIRO2zNgZu7YV780j8aeknj1I75ltjNdn9fVmL8yr542zZnVHvDmtW/cb7dXj1bRrH9WwY1couznb94aiTUV9XtvG67N1RgdsefVW8+b02h4hWkfUfrTSmxPIKL05gQzCCVmEE7IIJ2QRTsginJBFOCGLcEIW4YQswglZhBOyCCdkEU7IIpyQRTghi3BCFuGELMIJWV9tp0nmG2CzVgAAAABJRU5ErkJggg=="
+        "iVBORw0KGgoAAAANSUhEUgAAAIwAAAAjCAYAAABGiuIFAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAAAH9SURBVHhe7ZlLcgIxDERNbsUqXCscgHPNKhwr2eCU0yXJ0xp7YIp+VSyQZH3sxgPF6fP766cIsZIPNAgRIcEICglGUEgwgkKCERQSjKCQYASFBCMoJBhBIcEICglGUEgwguK05c/H5XxDU7ncr2j6x3K+dWNGwday5kGYfHvS9j6zx9QNs5xv7ub2fHsxq9asvEchJZgMe2707Fqz878ytGBwsy7369+rBeOORjuXNd+7Qn+H6T0rLb8nHlxvxWFMMWpY6xArD4J5Ec/v2T1fr18vt4WVE3soTh4rrgd9w7R4TdQXg5WrBPZKzy/8PfLsEfQNU4JCkUiiT0D1eXb0Yf2163pg3givH6wX+VrWxhUn1rJl7D1SN4xXYHn8QmI2vjS3Uobsui2MrskcHhM7g5RgysZDjsiKbi9Gz8wIgIm1GLG3acFUqnBwALaprYOMpp3Lm3ErzLxM7ExowUQqzW4o5ppxOK8OMy8T24Liz+wzLZgWPGh8n4Ed4Kgwjxcmdja0YLDh6MbZwuh8e9H27c3ACICJ7YG9Zc5t6M/qFhzOWlNjLB/S5uttopXPikN6eSOsmsjaeb1ZLayc2HuUA2N70DdMeRTxCnk+y1axfJgnGhqx8s3GqmnZnoHXh2ePSN0w4n1J3TDifZFgBIUEIygkGEEhwQgKCUZQ/AILWUXD0s0pvgAAAABJRU5ErkJggg=="
     )
 
     # --- Ảnh lựa chọn: "Image 1 of 5", "Image 2 of 5", ... ---
@@ -364,10 +364,6 @@ class RobloxCaptchaCollector:
 
         # --- Cách 1: Text/Role/XPath/CSS ---
         try:
-            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if iframe_el:
-                frame = await iframe_el.content_frame()
-                if frame:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
