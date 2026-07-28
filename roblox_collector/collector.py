@@ -128,14 +128,17 @@ class RobloxCaptchaCollector:
         "iVBORw0KGgoAAAANSUhEUgAAAIwAAAAjCAYAAABGiuIFAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAAAH9SURBVHhe7ZlLcgIxDERNbsUqXCscgHPNKhwr2eCU0yXJ0xp7YIp+VSyQZH3sxgPF6fP766cIsZIPNAgRIcEICglGUEgwgkKCERQSjKCQYASFBCMoJBhBIcEICglGUEgwguK05c/H5XxDU7ncr2j6x3K+dWNGwday5kGYfHvS9j6zx9QNs5xv7ub2fHsxq9asvEchJZgMe2707Fqz878ytGBwsy7369+rBeOORjuXNd+7Qn+H6T0rLb8nHlxvxWFMMWpY6xArD4J5Ec/v2T1fr18vt4WVE3soTh4rrgd9w7R4TdQXg5WrBPZKzy/8PfLsEfQNU4JCkUiiT0D1eXb0Yf2163pg3givH6wX+VrWxhUn1rJl7D1SN4xXYHn8QmI2vjS3Uobsui2MrskcHhM7g5RgysZDjsiKbi9Gz8wIgIm1GLG3acFUqnBwALaprYOMpp3Lm3ErzLxM7ExowUQqzW4o5ppxOK8OMy8T24Liz+wzLZgWPGh8n4Ed4Kgwjxcmdja0YLDh6MbZwuh8e9H27c3ACICJ7YG9Zc5t6M/qFhzOWlNjLB/S5uttopXPikN6eSOsmsjaeb1ZLayc2HuUA2N70DdMeRTxCnk+y1axfJgnGhqx8s3GqmnZnoHXh2ePSN0w4n1J3TDifZFgBIUEIygkGEEhwQgKCUZQ/AILWUXD0s0pvgAAAABJRU5ErkJggg=="
     )
 
-    # --- Ảnh lựa chọn: "Image 1 of 5", "Image 2 of 5", ... ---
-    SEL_CHOICE_IMAGES = 'img[aria-label*="Image "][aria-label*=" of "]'
-
     # --- Ảnh chính cần match: "Match This!" ---
-    SEL_KEY_FRAME = 'img.key-frame-image, img[aria-label*="Match This"]'
+    SEL_KEY_FRAME = 'img.key-frame-image, img[aria-label*="Match This"], img[alt*="Match"]'
 
-    # --- Game area (canvas chính) ---
-    SEL_GAME_AREA = 'canvas, [class*="game"], [class*="challenge"]'
+    # --- Ảnh lựa chọn: "Image 1 of 5", "Image 2 of 5", ... ---
+    SEL_CHOICE_IMAGES = 'img[aria-label*="Image "], img[aria-label*=" of "]'
+
+    # --- Game area (canvas chinh) ---
+    SEL_GAME_AREA = 'canvas, img, [class*="game"], [class*="challenge"], [class*="puzzle"]'
+
+    # --- Bat ky anh nao trong game (fallback rong) ---
+    SEL_ANY_GAME_IMG = 'img, canvas'
 
     # --- Nút xoay phải / điều hướng ---
     SEL_ROTATE_RIGHT = 'circle[r="17"]'
@@ -526,13 +529,11 @@ class RobloxCaptchaCollector:
                         self._step("Waiting for game images...")
                         captcha = page.frame_locator(self.SEL_CAPTCHA_IFRAME)
                         try:
-                            # Doi anh lua chon hoac key-frame xuat hien (omocaptcha da click verify)
-                            choice_sel = f"{self.SEL_KEY_FRAME}, {self.SEL_CHOICE_IMAGES}"
-                            await captcha.locator(choice_sel).first.wait_for(state="visible", timeout=30000)
+                            # Doi BAT KY anh nao trong game (omocaptcha da click verify)
+                            await captcha.locator(self.SEL_ANY_GAME_IMG).first.wait_for(state="visible", timeout=45000)
                             self._step("Game images appeared!")
                         except Exception:
-                            self._step("Game images timeout - skip")
-                            continue
+                            self._step("Game images wait timeout - vẫn thử chụp...")
 
                         await asyncio.sleep(1)
 
@@ -550,11 +551,16 @@ class RobloxCaptchaCollector:
 
                     except Exception as e:
                         err = str(e)
-                        if "Connection closed" in err or "Target closed" in err:
-                            logger.warning(f"[{self.username}] Restarting browser...")
-                            await context.close()
+                        if "closed" in err.lower():
+                            logger.warning(f"[{self.username}] Context closed - restarting...")
+                            try:
+                                await context.close()
+                            except Exception:
+                                pass
                             context = await p.chromium.launch_persistent_context(
-                                user_data_dir=str(user_data), headless=self.cfg["headless"],
+                                user_data_dir=str(user_data),
+                                headless=self.cfg["headless"],
+                                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
                             )
                             continue
                         logger.error(f"[{self.username}] {e}")
