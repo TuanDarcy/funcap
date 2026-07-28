@@ -82,7 +82,7 @@ DEFAULT_CONFIG = {
     "captcha_timeout_sec": 15,
     "click_to_reveal": True,
     "click_delay_sec": 2.0,
-    "debug": False,
+    "debug": True,
     "debug_dir": "captured/_debug",
 }
 
@@ -152,6 +152,14 @@ class RobloxCaptchaCollector:
         self.proxy = proxy
         self.cfg = config or DEFAULT_CONFIG
         self.total_captured = 0
+        self._debug = self.cfg.get("debug", False)
+        if self._debug:
+            logger.info(f"[{self.username}] 🐛 DEBUG mode ON")
+
+    def _step(self, msg: str):
+        """In log debug từng bước."""
+        if self._debug:
+            logger.info(f"[{self.username}] {msg}")
 
     # -- Proxy parser --
 
@@ -353,7 +361,7 @@ class RobloxCaptchaCollector:
                     launch_opts["proxy"] = proxy_cfg
 
                 browser = await p.chromium.launch(**launch_opts)
-                logger.info(f"[{self.username}] Bắt đầu thu thập | proxy={'có' if proxy_cfg else 'không'}")
+                self._step("✅ Browser đã mở")
 
                 for round_num in range(target):
                     if _shutdown.is_set():
@@ -361,6 +369,7 @@ class RobloxCaptchaCollector:
 
                     context = None
                     try:
+                        self._step(f"🔄 Vòng #{round_num+1} — đang mở tab mới...")
                         context = await browser.new_context(
                             viewport={"width": self.cfg["viewport_width"], "height": self.cfg["viewport_height"]},
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -370,15 +379,21 @@ class RobloxCaptchaCollector:
                         await page.add_init_script(self.STEALTH_JS)
 
                         # (1) Vào Roblox login
+                        self._step("🌐 Đang load trang Roblox login...")
                         await page.goto(self.ROBLOX_LOGIN_URL, wait_until="networkidle", timeout=30000)
                         await asyncio.sleep(2)
+                        self._step("✅ Trang login đã load xong")
 
                         # (2) Điền form
+                        self._step(f"📝 Đang điền username: {self.username}")
                         await self._fill_login_form(page)
                         await asyncio.sleep(0.3)
+                        self._step("✅ Đã điền username + password")
 
                         # (3) Bấm Login
+                        self._step("🖱️ Đang bấm nút Login...")
                         await self._click_login(page)
+                        self._step("✅ Đã bấm Login — đang đợi CAPTCHA...")
 
                         # (4) Đợi CAPTCHA iframe xuất hiện
                         captcha_appeared = False
@@ -388,17 +403,25 @@ class RobloxCaptchaCollector:
                                 timeout=self.cfg["captcha_timeout_sec"] * 1000,
                             )
                             captcha_appeared = True
+                            self._step("✅ Đã phát hiện iframe CAPTCHA!")
                         except Exception:
+                            self._step("❌ Không thấy iframe CAPTCHA — bỏ qua vòng này")
                             continue
 
                         await asyncio.sleep(1)
 
                         # (5) Click Verify/Start Puzzle
                         if self.cfg.get("click_to_reveal", True) and captcha_appeared:
-                            await self._click_reveal_captcha(page, round_num)
+                            self._step("🔍 Đang tìm nút Start Puzzle...")
+                            clicked = await self._click_reveal_captcha(page, round_num)
+                            if clicked:
+                                self._step("✅ Đã click Start Puzzle — game đang hiện...")
+                            else:
+                                self._step("⚠️ Không tìm thấy nút Verify — vẫn thử chụp...")
                             await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
 
                         # (6) Chụp & detect
+                        self._step("📸 Đang chụp ảnh CAPTCHA...")
                         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                         captcha_results = await self._capture_iframe(page, round_num, ts)
 
@@ -406,10 +429,13 @@ class RobloxCaptchaCollector:
                             captured_all.extend(captcha_results)
                             self.total_captured += len(captcha_results)
                             types = set(r["type"] for r in captcha_results)
+                            self._step(f"✅ Chụp xong: +{len(captcha_results)} ảnh ({', '.join(types)})")
                             logger.info(
                                 f"[{self.username}] #{self.total_captured} | "
                                 f"+{len(captcha_results)} ảnh ({', '.join(types)})"
                             )
+                        else:
+                            self._step("❌ Không chụp được ảnh nào!")
 
                     except Exception as e:
                         err_msg = str(e)
