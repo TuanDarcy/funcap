@@ -118,7 +118,11 @@ class RobloxCaptchaCollector:
     SEL_CAPTCHA_IFRAME = '#game-core-frame, iframe[src*="arkose"], iframe[src*="funcaptcha"]'
 
     # --- Nút "Start Puzzle" trong iframe ---
-    SEL_START_PUZZLE = 'button[data-theme="home.verifyButton"], button[aria-label*="Start Puzzle"]'
+    SEL_START_PUZZLE = (
+        '#root > div > div.sc-99cwso-0.sc-11w6f91-0.fcBZbp.eWRcSj.home.box.screen > button,'
+        'button[data-theme="home.verifyButton"],'
+        'button[aria-label*="Start Puzzle"]'
+    )
 
     # --- Ảnh lựa chọn: "Image 1 of 5", "Image 2 of 5", ... ---
     SEL_CHOICE_IMAGES = 'img[aria-label*="Image "][aria-label*=" of "]'
