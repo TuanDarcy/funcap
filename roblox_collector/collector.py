@@ -514,23 +514,29 @@ class RobloxCaptchaCollector:
                         await self._click_login(page)
                         self._step("Clicked login - waiting CAPTCHA...")
 
-                        # (4) Wait CAPTCHA
+                        # (4) Wait CAPTCHA iframe
                         try:
                             await page.wait_for_selector(self.CAPTCHA_NESTED_SEL, timeout=self.cfg["captcha_timeout_sec"] * 1000)
-                            self._step("CAPTCHA iframe found")
+                            self._step("CAPTCHA iframe found - giao cho omocaptcha...")
                         except Exception:
                             self._step("No CAPTCHA - skip")
                             continue
 
+                        # (5) Giao cho omocaptcha: doi game images xuat hien
+                        self._step("Waiting for game images...")
+                        captcha = page.frame_locator(self.SEL_CAPTCHA_IFRAME)
+                        try:
+                            # Doi anh lua chon hoac key-frame xuat hien (omocaptcha da click verify)
+                            choice_sel = f"{self.SEL_KEY_FRAME}, {self.SEL_CHOICE_IMAGES}"
+                            await captcha.locator(choice_sel).first.wait_for(state="visible", timeout=30000)
+                            self._step("Game images appeared!")
+                        except Exception:
+                            self._step("Game images timeout - skip")
+                            continue
+
                         await asyncio.sleep(1)
 
-                        # (5) Click Start Puzzle
-                        if self.cfg.get("click_to_reveal", True):
-                            clicked = await self._click_reveal_captcha(page, round_num)
-                            self._step("Clicked Start Puzzle" if clicked else "Click failed")
-                            await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
-
-                        # (6) Capture
+                        # (6) Capture chi anh game (khong chup full frame)
                         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                         captcha_results = await self._capture_iframe(page, round_num, ts)
 
@@ -623,17 +629,6 @@ class RobloxCaptchaCollector:
                         pass
             except Exception:
                 pass
-
-            # --- 3. Fallback ---
-            if not results:
-                game_path = type_dir / f"{self.username}_r{round_num}_full_{ts}.png"
-                try:
-                    area = captcha.locator(self.SEL_GAME_AREA).first
-                    await area.screenshot(path=str(game_path))
-                except Exception:
-                    pass
-                results.append({"image_path": str(game_path), "type": game_type,
-                                "username": self.username, "round": round_num + 1, "ts": ts})
 
         except Exception:
             pass
