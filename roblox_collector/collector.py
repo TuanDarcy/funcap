@@ -346,10 +346,10 @@ class RobloxCaptchaCollector:
             self._step(f"⚠️ Image click lỗi: {e}")
             return False
 
-    # -- Click "Start Puzzle" / "Verify" --
+    # -- Click bang anh base64 (OpenCV) --
 
     async def _click_reveal_captcha(self, page, round_num: int = 0):
-        """Tim va bam nut Verify/Start Puzzle trong iframe FunCAPTCHA."""
+        """Tim va click nut Verify bang anh base64 + OpenCV template matching."""
 
         # --- Doi loading "Verifying browser..." bien mat ---
         try:
@@ -369,7 +369,7 @@ class RobloxCaptchaCollector:
         except Exception:
             pass
 
-        # --- Cach 0: Click bang anh base64 (OpenCV) ---
+        # --- Click bang anh ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
             if iframe_el:
@@ -380,69 +380,23 @@ class RobloxCaptchaCollector:
         except Exception:
             pass
 
-        # --- Cách 1: Text/Role/XPath/CSS ---
-        try:
-            iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=5000)
-            if iframe_el:
-                frame = await iframe_el.content_frame()
-                if frame:
-                    verify_selectors = [
-                        # Cách 1: Click theo TEXT HIỂN THỊ (mạnh nhất, không phụ thuộc class)
-                        ('text', 'Start Puzzle'),
-                        ('role', 'button'),
-                        # Cách 2: XPath
-                        ('xpath', '/html/body/div/div/div[1]/button'),
-                        # Cách 3: CSS
-                        ('css', 'button[data-theme="home.verifyButton"]'),
-                        ('css', '#root > div > div.sc-99cwso-0.sc-11w6f91-0.fcBZbp.eWRcSj.home.box.screen > button'),
-                        ('css', 'button:has-text("Start Puzzle")'),
-                        ('css', 'button:has-text("Verify")'),
-                        ('css', 'button:has-text("Start")'),
-                    ]
-                    for method, sel in verify_selectors:
-                        try:
-                            if method == 'text':
-                                btn = frame.get_by_text(sel, exact=False).first
-                                await btn.wait_for(state="visible", timeout=1500)
-                            elif method == 'role':
-                                btn = frame.get_by_role("button", name="Start Puzzle")
-                                await btn.wait_for(state="visible", timeout=1500)
-                            elif method == 'xpath':
-                                btn = frame.locator(sel).first
-                                await btn.wait_for(state="visible", timeout=1500)
-                            else:
-                                btn = await frame.wait_for_selector(sel, timeout=1500)
-                            if btn:
-                                text = (await btn.inner_text()).strip()
-                                logger.info(f"[{self.username}] Click: '{text}' (method={method})")
-                                await btn.click(timeout=3000)
-                                await asyncio.sleep(self.cfg.get("click_delay_sec", 3.0))
-                                return True
-                        except Exception:
-                            continue
-            self._step("Da thu het text/role/xpath/css — khong tim thay nut")
-        except Exception:
-            pass
-
-        # --- Cach 2: Click vao nut trong iframe (khong click iframe element) ---
+        # --- Fallback: click giua iframe ---
         try:
             iframe_el = await page.wait_for_selector(self.SEL_CAPTCHA_IFRAME, timeout=3000)
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
-                    # Thu click vao giua man hinh iframe - noi nut Start Puzzle thuong nam
                     box = await iframe_el.bounding_box()
                     if box:
-                        cx = box["width"] // 2
-                        cy = box["height"] // 2
-                        self._step(f"Click vao giua iframe ({cx}, {cy})")
+                        cx, cy = box["width"] // 2, box["height"] // 2
+                        self._step(f"Fallback: click giua iframe ({cx}, {cy})")
                         await frame.click(position={"x": cx, "y": cy}, timeout=3000)
                         await asyncio.sleep(3)
                         return True
         except Exception:
             pass
 
-        logger.warning(f"[{self.username}] KHÔNG tìm thấy nút Verify!")
+        logger.warning(f"[{self.username}] KHONG tim thay nut Verify!")
         return False
 
     # -- Main loop --
